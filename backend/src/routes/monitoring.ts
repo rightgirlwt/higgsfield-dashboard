@@ -22,7 +22,7 @@ monitoring.get(
     const where = ['l.org_id = $1'];
     const add = (sql: string, v: unknown) => (params.push(v), where.push(sql.replace('?', `$${params.length}`)));
     if (['debug', 'info', 'warn', 'error'].includes(String(req.query.level))) add('l.level = ?', req.query.level);
-    if (['prompt', 'workflow'].includes(String(req.query.kind))) add('r.kind = ?', req.query.kind);
+    if (['prompt', 'workflow', 'generation'].includes(String(req.query.kind))) add('r.kind = ?', req.query.kind);
     if (['queued', 'running', 'completed', 'failed', 'cancelled'].includes(String(req.query.status))) add('r.status = ?', req.query.status);
     if (isUuid(req.query.workflowId)) add('r.ref_id = ?', req.query.workflowId);
     if (isUuid(req.query.runId)) add('l.run_id = ?', req.query.runId);

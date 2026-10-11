@@ -34,6 +34,7 @@ Other commands: `npm test` (backend tests) · `npm run typecheck` · `npm run bu
 | Area | Highlights |
 |---|---|
 | **Overview** | KPI cards with period‑over‑period deltas, monthly budget bar, stacked spend chart, usage breakdown by model / workflow / provider, recent runs, live status, CSV + PDF export |
+| **Studio** | Generate images and video with Higgsfield models (starter catalog: Soul 2, Soul Cinema, Flux 2, Kling 3.0 Turbo/Standard/Pro/4K): prompt bar, model picker, per‑model settings, batch (up to 4), start/end/reference inputs, live progress, gallery, "use this prompt". Results land in the media timeline, count as spend, show in Monitoring, and are available as a **Generate** node in workflows |
 | **Prompt Studio** | System/user prompts, model picker with prices, temperature (disabled for models that reject it), max tokens, `{{variable}}` injection, test runner with tokens/cost/latency, immutable version history, save‑as‑template, side‑by‑side compare (across models, or editor vs. a saved version) |
 | **Workflows** | React Flow editor with Trigger / LLM / Transform / Action / Output nodes, connection rules (no cycles, no inputs into triggers…), live validation, save to backend, run with live per‑node status + logs, run history, template library, scheduled triggers |
 | **Media** | Day‑grouped timeline with infinite scroll (keyset pagination), filters (date range, type, tag, workflow, text), accessible lightbox with video player and keyboard nav, CSV/JSON export, add by URL or upload to S3 |
@@ -52,7 +53,7 @@ Copy `backend/.env.example` → `backend/.env` (and `frontend/.env.example` → 
 | `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY` | Clerk backend/frontend keys when `AUTH_PROVIDER=clerk` |
 | `SECRETS_ENCRYPTION_KEY` | 32‑byte key (hex) that encrypts API keys at rest. **Required in production; back it up** |
 | `ANTHROPIC_API_KEY` | Optional global fallback; orgs can store their own in Settings |
-| `HIGGSFIELD_API_KEY`, `HIGGSFIELD_API_BASE` | Higgsfield adapter (see limits below) |
+| `HIGGSFIELD_API_KEY`, `HIGGSFIELD_API_BASE` | Optional server‑level fallbacks. Normally set in the app instead: key under **Settings → API keys** (format `id:secret`), API address under **Settings → Higgsfield** |
 | `CLIENT_ORIGIN` | Allowed browser origins for cross‑origin API use |
 
 ### Database
@@ -83,14 +84,14 @@ Production checklist: managed Postgres + backups · `SECRETS_ENCRYPTION_KEY` sto
 
 ## Status & honest limits
 
-Verified in development: backend typecheck + **35 automated tests** (auth/RBAC, CORS, queue + workflow engine, media pagination/filters, budgets, secrets encryption, exports…), production build of the frontend, and a manual run‑through of the UI against the live backend (overview, prompt run, workflow run with live node status, monitoring, media + lightbox, tablet layout).
+Verified in development: backend typecheck + **49 automated tests** (auth/RBAC, CORS, queue + workflow engine, media pagination/filters, budgets, secrets encryption, exports…), production build of the frontend, and a manual run‑through of the UI against the live backend (overview, prompt run, workflow run with live node status, monitoring, media + lightbox, tablet layout).
 
 **Not verified against live third‑party services** (no credentials were available when this was built), so test these before relying on them:
 
 - **Anthropic calls with a real key** – code follows the current SDK usage, but only the simulated path was exercised end to end.
 - **Clerk sign‑in** (frontend + backend verification + first‑login org bootstrap).
 - **S3 presigned uploads** (needs a bucket with a CORS rule allowing `PUT` from your origin).
-- **Higgsfield API** – no public API spec was available, so `backend/src/services/higgsfield.ts` defines an *assumed* contract (`GET /generations`, `GET /usage`). Adapt it to the real endpoints; until configured it returns flagged simulated data and **real Higgsfield spend is not tracked**.
+- **The live Higgsfield platform.** Studio's request/response handling follows the contract used by the open‑source studio `wide-trace/open-higgsfield` (`POST {base}/{model-path}`, `GET {base}/requests/{id}/status`, `Authorization: Key id:secret`, statuses `completed/failed/nsfw/canceled`). That is the only public reference available, not an official spec, and it was exercised here against a **fake local server**, never the real platform. The model catalog (`backend/src/services/studioCatalog.ts`) lists only models whose paths/parameters were visible there; entries marked `verified: false` (Soul aspect ratios, Flux 2 parameters) need checking. The platform API doesn't report cost, so **you enter a price per output** (Settings → Higgsfield) for spend tracking; unpriced models are recorded at $0. There is no way to list past platform generations, so the gallery shows what was generated through this app.
 - **Docker/compose files** were written but not run.
 
 Known gaps / design notes:

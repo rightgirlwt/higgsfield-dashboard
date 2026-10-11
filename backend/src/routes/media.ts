@@ -20,6 +20,8 @@ function filters(req: any, startIdx = 1) {
   if (req.query.type === 'photo' || req.query.type === 'video') add('m.type = ?', req.query.type);
   if (typeof req.query.tag === 'string' && req.query.tag) add('? = ANY(m.tags)', req.query.tag.toLowerCase());
   if (isUuid(req.query.workflowId)) add('m.workflow_id = ?', req.query.workflowId);
+  if (req.query.source === 'studio') add("m.metadata->>'source' = ?", 'studio');
+  if (isUuid(req.query.runId)) add('m.run_id = ?', req.query.runId);
   if (typeof req.query.from === 'string' && !Number.isNaN(Date.parse(req.query.from))) add('m.created_at >= ?', new Date(req.query.from).toISOString());
   if (typeof req.query.to === 'string' && !Number.isNaN(Date.parse(req.query.to))) {
     // `to` is an inclusive calendar day when given as YYYY-MM-DD.

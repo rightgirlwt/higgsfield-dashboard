@@ -118,3 +118,14 @@ Connect with `io(origin, { auth: { token } })` (same token as REST). Server → 
 | `job:update` | Run without `input`/`output` – on queue, start, finish |
 | `log:new` | `{id, runId, level, message, nodeId, ts, kind, refId, refName}` |
 | `alert:new` | `{id, kind, severity, message, …}` |
+
+## Studio (Higgsfield generation)
+
+| Method & path | Role | Notes |
+|---|---|---|
+| `GET /studio/models` | any | `{connected, baseUrlSet, models:[{id,label,surface,description,roles,settings,verified,note,nativeBatch,priceUsd}]}`. `connected=false` means simulated mode |
+| `POST /studio/generate` | user | `{modelId, prompt(1-5000), settings?, media?:{start,end,reference,video,audio: url[]}, count?(1-4)}` → `202 {run}` (run `kind:"generation"`). Settings and media are validated against the model (unknown keys, ranges, per-role limits, http(s)-only URLs) → `400` otherwise. Progress via sockets; results are saved to the media timeline (`GET /media?source=studio&runId=`) |
+| `PUT /settings/higgsfield` | admin | `{baseUrl}` (http(s) only, https required in production, no credentials in URL; empty clears) |
+| `PUT /settings/studio-prices` | admin | `{prices:{modelId: usdPerOutput\|null}}` |
+
+`GET /settings` also returns `higgsfield:{baseUrl, baseUrlFromEnv, prices}`. Runs of `kind=generation` appear in `GET /runs`, Monitoring and the job table. Workflow definitions may now contain `generate` nodes (`data: {model, prompt, startUrl?, endUrl?, count?}`).

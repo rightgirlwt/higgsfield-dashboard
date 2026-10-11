@@ -3,10 +3,12 @@ import { emitToOrg, getDb } from '../ctx';
 import { logger } from '../logger';
 
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type RunKind = 'prompt' | 'workflow' | 'generation';
+export const RUN_KINDS: RunKind[] = ['prompt', 'workflow', 'generation'];
 
 export interface RunDto {
   id: string;
-  kind: 'prompt' | 'workflow';
+  kind: RunKind;
   refId: string | null;
   refName: string;
   status: RunStatus;
@@ -59,7 +61,7 @@ export async function getRun(orgId: string, id: string): Promise<RunDto | null> 
 
 export async function createRun(p: {
   orgId: string;
-  kind: 'prompt' | 'workflow';
+  kind: RunKind;
   refId?: string | null;
   refName: string;
   model?: string | null;
@@ -80,7 +82,7 @@ export async function createRun(p: {
 }
 
 /** Small in-memory cache so live log events can carry run metadata without a DB lookup per line. */
-const runMeta = new Map<string, { kind: 'prompt' | 'workflow'; refId: string | null; refName: string }>();
+const runMeta = new Map<string, { kind: RunKind; refId: string | null; refName: string }>();
 
 /** Socket payloads omit the (potentially large) input/output bodies. */
 const slim = (r: RunDto) => ({ ...r, input: undefined, output: undefined });
@@ -154,6 +156,8 @@ class JobQueue {
   private pending: Pending[] = [];
   private active = 0;
 
+  constructor(private readonly limit: () => number) {}
+
   enqueue(orgId: string, runId: string, work: Work): Promise<RunDto> {
     return new Promise((resolve) => {
       this.pending.push({ orgId, runId, work, resolve });
@@ -169,7 +173,7 @@ class JobQueue {
   }
 
   private pump(): void {
-    while (this.active < config.queueConcurrency && this.pending.length) {
+    while (this.active < this.limit() && this.pending.length) {
       const job = this.pending.shift()!;
       this.active++;
       execute(job.orgId, job.runId, job.work)
@@ -183,7 +187,13 @@ class JobQueue {
   }
 }
 
-export const queue = new JobQueue();
+export const queue = new JobQueue(() => config.queueConcurrency);
+
+/**
+ * Image/video generations spend nearly all their time waiting on the Higgsfield platform (polling),
+ * so they get their own, wider lane and never block quick prompt/workflow jobs.
+ */
+export const generationQueue = new JobQueue(() => config.generationConcurrency);
 
 /** On boot, anything left queued/running by a previous process can never finish — mark it failed. */
 export async function recoverInterruptedRuns(): Promise<number> {

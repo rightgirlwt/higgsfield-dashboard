@@ -196,7 +196,7 @@ export default function Media() {
   );
 }
 
-function Lightbox({ items, index, onIndex, onClose, canDelete, onDelete }: { items: MediaItem[]; index: number; onIndex: (i: number) => void; onClose: () => void; canDelete: boolean; onDelete: (m: MediaItem) => void }) {
+export function Lightbox({ items, index, onIndex, onClose, canDelete, onDelete }: { items: MediaItem[]; index: number; onIndex: (i: number) => void; onClose: () => void; canDelete: boolean; onDelete: (m: MediaItem) => void }) {
   const m = items[index];
   const ref = useRef<HTMLDivElement>(null);
   const prev = useCallback(() => onIndex(Math.max(0, index - 1)), [index, onIndex]);
@@ -241,6 +241,9 @@ function Lightbox({ items, index, onIndex, onClose, canDelete, onDelete }: { ite
         )}
         <IconButton label="Next" className="absolute right-0 z-10 disabled:opacity-30" disabled={index === items.length - 1} onClick={next}><ChevronRight className="h-5 w-5" aria-hidden /></IconButton>
       </div>
+      {typeof m.metadata?.prompt === 'string' && (
+        <p className="mt-3 max-h-20 overflow-auto rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300"><span className="mr-2 text-xs uppercase tracking-wider text-slate-500">{m.metadata.modelLabel ?? 'Prompt'}</span>{m.metadata.prompt}</p>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
         {m.workflowName && m.workflowId && <Link to={`/workflows/${m.workflowId}`} className="text-cyan-300 underline">{m.workflowName}</Link>}
         {m.tags.map((t) => <Badge key={t}>{t}</Badge>)}

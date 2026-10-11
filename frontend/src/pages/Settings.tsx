@@ -5,10 +5,10 @@ import { Badge, Button, Card, CardHeader, ErrorState, Field, Input, PageHeader, 
 import { api, errorMessage } from '../lib/api';
 import { price, timeAgo } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
-import type { Role, SecretStatus, SettingsData, TeamUser } from '../lib/types';
+import type { Role, SecretStatus, SettingsData, StudioCatalog, TeamUser } from '../lib/types';
 import { useToast } from '../state/Toast';
 
-type Tab = 'models' | 'keys' | 'storage' | 'team' | 'billing' | 'data';
+type Tab = 'models' | 'keys' | 'higgsfield' | 'storage' | 'team' | 'billing' | 'data';
 
 export default function SettingsPage() {
   useDocumentTitle('Settings');
@@ -26,7 +26,8 @@ export default function SettingsPage() {
           onChange={setTab}
           tabs={[
             { id: 'keys', label: 'API keys' },
-            { id: 'models', label: 'Models' },
+            { id: 'higgsfield', label: 'Higgsfield' },
+            { id: 'models', label: 'Claude models' },
             { id: 'storage', label: 'Storage' },
             { id: 'team', label: 'Team' },
             { id: 'billing', label: 'Billing & alerts' },
@@ -44,6 +45,7 @@ export default function SettingsPage() {
       ) : (
         <>
           {tab === 'keys' && isAdmin && <Keys />}
+          {tab === 'higgsfield' && isAdmin && <HiggsfieldTab s={settings.data} onSaved={settings.reload} />}
           {tab === 'models' && isAdmin && <Models s={settings.data} onSaved={settings.reload} />}
           {tab === 'storage' && isAdmin && <Storage s={settings.data} onSaved={settings.reload} />}
           {tab === 'team' && <Team />}
@@ -57,7 +59,7 @@ export default function SettingsPage() {
 
 const SECRET_META: Record<SecretStatus['name'], { label: string; hint: string; group: 'ai' | 'storage' }> = {
   anthropic: { label: 'Anthropic (Claude) API key', hint: 'Used for prompt runs and workflow LLM nodes. Without it the app returns clearly-labelled simulated responses.', group: 'ai' },
-  higgsfield: { label: 'Higgsfield API key', hint: 'Used to pull generations and usage. Also requires HIGGSFIELD_API_BASE on the server.', group: 'ai' },
+  higgsfield: { label: 'Higgsfield API key', hint: 'Paste the whole key in the form id:secret. Studio needs this plus the API address on the Higgsfield tab.', group: 'ai' },
   s3_access_key_id: { label: 'S3 access key ID', hint: 'For direct media uploads to your bucket.', group: 'storage' },
   s3_secret_access_key: { label: 'S3 secret access key', hint: 'Stored encrypted; never shown again.', group: 'storage' },
 };
@@ -140,6 +142,85 @@ function Keys() {
         })}
       </ul>
     </Card>
+  );
+}
+
+function HiggsfieldTab({ s, onSaved }: { s: SettingsData; onSaved: () => void }) {
+  const toast = useToast();
+  const catalog = useApi<StudioCatalog>('/studio/models');
+  const secrets = useApi<SecretStatus[]>('/settings/secrets');
+  const [baseUrl, setBaseUrl] = useState(s.higgsfield.baseUrl);
+  const [prices, setPrices] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(s.higgsfield.prices).map(([k, v]) => [k, v === null ? '' : String(v)])));
+  const [busy, setBusy] = useState<string | null>(null);
+  const keySet = secrets.data?.find((x) => x.name === 'higgsfield')?.configured ?? false;
+
+  const saveUrl = async () => {
+    setBusy('url');
+    try {
+      const r = await api.put<{ baseUrl: string }>('/settings/higgsfield', { baseUrl });
+      setBaseUrl(r.baseUrl);
+      toast.success(r.baseUrl ? 'API address saved' : 'API address cleared');
+      onSaved();
+      catalog.reload();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const savePrices = async () => {
+    setBusy('prices');
+    try {
+      const body = Object.fromEntries(Object.entries(prices).map(([k, v]) => [k, v.trim() === '' ? null : Number(v)]));
+      if (Object.values(body).some((v) => v !== null && (!Number.isFinite(v) || v < 0))) throw new Error('Prices must be numbers of 0 or more');
+      await api.put('/settings/studio-prices', { prices: body });
+      toast.success('Prices saved');
+      onSaved();
+      catalog.reload();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-2">
+      <Card className="h-fit p-5">
+        <CardHeader eyebrow="Studio" title="Connection" />
+        <div className="mb-4 flex flex-wrap gap-2">
+          <Badge tone={keySet ? 'emerald' : 'amber'}>API key {keySet ? 'saved' : 'missing'}</Badge>
+          <Badge tone={baseUrl ? 'emerald' : 'amber'}>API address {baseUrl ? 'set' : 'missing'}</Badge>
+          <Badge tone={catalog.data?.connected ? 'emerald' : 'amber'}>{catalog.data?.connected ? 'Studio is live' : 'Studio is simulated'}</Badge>
+        </div>
+        <Field label="Higgsfield API address" htmlFor="hf-base" hint={s.higgsfield.baseUrlFromEnv ? 'Currently coming from the server’s HIGGSFIELD_API_BASE setting; saving a value here overrides it.' : 'Paste the address exactly as Higgsfield gives it, starting with https://. No trailing slash needed.'}>
+          <Input id="hf-base" type="url" placeholder="https://…" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+        </Field>
+        <div className="mt-3 flex gap-2">
+          <Button variant="primary" loading={busy === 'url'} onClick={saveUrl}>Save address</Button>
+        </div>
+        <p className="mt-4 text-xs text-slate-500">The key (format <code>id:secret</code>) is saved on the <strong>API keys</strong> tab. Both are required before Studio talks to Higgsfield; until then it produces placeholder results and nothing is billed.</p>
+      </Card>
+
+      <Card className="p-5">
+        <CardHeader eyebrow="Spend tracking" title="Price per generated output (USD)" />
+        <p className="mb-4 text-sm text-slate-400">The Higgsfield API doesn’t report cost, so enter what one image or one video costs you (from your plan or pricing page). Leave blank if unknown — those generations are recorded as $0.</p>
+        {!catalog.data ? <Skeleton className="h-40" /> : (
+          <ul className="space-y-2">
+            {catalog.data.models.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-3">
+                <label htmlFor={`price-${m.id}`} className="text-sm">{m.label} <span className="text-xs text-slate-500">({m.surface})</span></label>
+                <div className="flex items-center gap-1">
+                  <span className="text-slate-500">$</span>
+                  <Input id={`price-${m.id}`} className="w-24" type="number" min={0} step="0.01" placeholder="—" value={prices[m.id] ?? ''} onChange={(e) => setPrices((p) => ({ ...p, [m.id]: e.target.value }))} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Button className="mt-4" variant="primary" loading={busy === 'prices'} onClick={savePrices}>Save prices</Button>
+      </Card>
+    </div>
   );
 }
 

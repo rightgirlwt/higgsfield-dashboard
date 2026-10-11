@@ -3,9 +3,13 @@ import { z } from 'zod';
 import { requireRole } from '../auth';
 import { getDb } from '../ctx';
 import { badRequest, conflict, forbidden, notFound, wrap } from '../lib/errors';
+import { config } from '../config';
 import { getModel, MODELS } from '../lib/pricing';
+import { getBaseUrl, normalizeBaseUrl } from '../services/higgsfield';
+import { getPrices, setPrices } from '../services/studio';
+import { getStudioModel } from '../services/studioCatalog';
 import { deleteSecret, getSecret, listSecretStatus, SECRET_NAMES, setSecret, type SecretName } from '../services/secrets';
-import { getDefaults, getStorage, putSetting } from '../services/settings';
+import { getDefaults, getSetting, getStorage, putSetting } from '../services/settings';
 import { uuidParam } from './util';
 
 export const settings = Router();
@@ -25,7 +29,43 @@ settings.get(
       storage: await getStorage(org),
       billing: { monthlyBudgetUsd: rows[0].monthly_budget_usd, alertThresholdPct: rows[0].alert_threshold_pct },
       models: MODELS,
+      higgsfield: {
+        baseUrl: await getBaseUrl(org),
+        baseUrlFromEnv: !(await getSetting<{ baseUrl: string }>(org, 'higgsfield', { baseUrl: '' })).baseUrl && !!config.higgsfieldApiBase,
+        prices: await getPrices(org),
+      },
     });
+  }),
+);
+
+settings.put(
+  '/higgsfield',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    const { baseUrl } = z.object({ baseUrl: z.string().max(300) }).parse(req.body);
+    let clean = '';
+    if (baseUrl.trim()) {
+      try {
+        clean = normalizeBaseUrl(baseUrl);
+      } catch (e) {
+        throw badRequest(e instanceof Error && !/Invalid URL/.test(e.message) ? e.message : 'That is not a valid URL (include https://)');
+      }
+    }
+    await putSetting(req.user!.orgId, 'higgsfield', { baseUrl: clean });
+    res.json({ baseUrl: clean });
+  }),
+);
+
+/** Studio price per generated output (USD). null clears a price. The platform API doesn't report cost. */
+settings.put(
+  '/studio-prices',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    const { prices } = z.object({ prices: z.record(z.string(), z.number().min(0).max(1000).nullable()) }).parse(req.body);
+    for (const id of Object.keys(prices)) if (!getStudioModel(id)) throw badRequest(`Unknown Studio model "${id}"`);
+    const merged = { ...(await getPrices(req.user!.orgId)), ...prices };
+    await setPrices(req.user!.orgId, merged);
+    res.json({ prices: merged });
   }),
 );
 

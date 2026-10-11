@@ -46,3 +46,7 @@ pages/              Overview, PromptStudio, Workflows, WorkflowBuilder, Media, M
 ## Accessibility (WCAG 2.1 oriented)
 
 Skip link and landmarks (`nav`, `main`, `aside`), visible focus ring on every control, labelled form fields, `aria-live` regions for toasts/results/log counts, dialogs with focus management, tables with captions and `scope`, keyboard‑operable lightbox, charts with text alternatives, `prefers-reduced-motion` respected, status never conveyed by colour alone. Not yet audited with a screen reader or automated tooling (axe/Lighthouse) – run one before claiming conformance.
+
+## Studio page (`pages/Studio.tsx`)
+
+Prompt + model picker (grouped Images / Video), settings rendered from the catalog metadata (`SettingControl`: enum → select, range → slider, boolean → checkbox), per-role media slots (`MediaSlot`: paste a public URL or pick a library image via `LibraryPicker`), cost estimate from the admin-set price, **In progress** strip (live status line from socket logs; failures stay visible for 10 minutes), gallery of Studio results (reuses `Lightbox` from `Media.tsx`, "Use this prompt" restores model/settings/prompt). Settings → **Higgsfield** holds the API address and per-model prices. Workflow builder gained a **Generate** node.

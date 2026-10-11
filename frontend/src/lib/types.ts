@@ -48,7 +48,7 @@ export interface BreakdownRow {
 
 export interface Run {
   id: string;
-  kind: 'prompt' | 'workflow';
+  kind: 'prompt' | 'workflow' | 'generation';
   refId: string | null;
   refName: string;
   status: RunStatus;
@@ -74,7 +74,7 @@ export interface RunLog {
   message: string;
   nodeId: string | null;
   ts: string;
-  kind?: 'prompt' | 'workflow' | null;
+  kind?: 'prompt' | 'workflow' | 'generation' | null;
   refId?: string | null;
   refName?: string | null;
   runStatus?: RunStatus | null;
@@ -135,7 +135,32 @@ export interface PromptDetail {
   variableNames: string[];
 }
 
-export type NodeType = 'trigger' | 'llm' | 'transform' | 'action' | 'output';
+export type NodeType = 'trigger' | 'llm' | 'generate' | 'transform' | 'action' | 'output';
+
+export type MediaRole = 'start' | 'end' | 'reference' | 'video' | 'audio';
+export type SettingSpec =
+  | { type: 'enum'; label: string; values: string[]; default: string }
+  | { type: 'range'; label: string; min: number; max: number; step?: number; default: number }
+  | { type: 'boolean'; label: string; default: boolean };
+
+export interface StudioModel {
+  id: string;
+  label: string;
+  surface: 'image' | 'video';
+  description: string;
+  roles: Partial<Record<MediaRole, number>>;
+  settings: Record<string, SettingSpec>;
+  verified: boolean;
+  note?: string;
+  nativeBatch: boolean;
+  priceUsd: number | null;
+}
+
+export interface StudioCatalog {
+  connected: boolean;
+  baseUrlSet: boolean;
+  models: StudioModel[];
+}
 
 export interface WfNodeData {
   label?: string;
@@ -229,6 +254,7 @@ export interface SettingsData {
   storage: { endpoint: string; region: string; bucket: string; publicBaseUrl: string; forcePathStyle: boolean };
   billing: { monthlyBudgetUsd: number; alertThresholdPct: number };
   models: ModelInfo[];
+  higgsfield: { baseUrl: string; baseUrlFromEnv: boolean; prices: Record<string, number | null> };
 }
 
 export interface SearchResults {

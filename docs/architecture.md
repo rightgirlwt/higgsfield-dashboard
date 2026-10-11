@@ -85,3 +85,12 @@ Socket.IO events (server → client): `monitoring:update`, `job:update`, `log:ne
 - The queue, scheduler and monitoring broadcaster are per‑process. Run **one backend replica** or replace `services/jobs.ts` with a durable queue (BullMQ / pg‑boss) and use the Socket.IO Redis adapter for multi‑instance fan‑out.
 - Dashboard queries aggregate `usage_events` directly; add rollup tables if an org reaches millions of events.
 - `PGlite` is for development and tests only.
+
+## Studio (Higgsfield generation)
+
+- **Contract.** `services/higgsfield.ts` calls `POST {base}/{model-path}` and polls `GET {base}/requests/{id}/status` with `Authorization: Key <id:secret>`; terminal statuses are `completed`, `failed`, `nsfw`, `canceled`; results are `images[].url` / `video.url`. This mirrors the open-source studio at github.com/wide-trace/open-higgsfield (not an official spec) and is tested against a fake server.
+- **Catalog.** `services/studioCatalog.ts` is data + a `build()` per model that maps (prompt, settings, media) to the platform path/body (e.g. Kling switches between text-to-video and image-to-video when a start frame is supplied). The UI renders settings generically from this metadata. Add a model by adding an entry.
+- **Execution.** `POST /studio/generate` creates a `job_runs` row (`kind=generation`) and enqueues on a separate wider lane (`generationQueue`, `GENERATION_CONCURRENCY`) so long polls never block prompt/workflow jobs. `runStudioGeneration` submits N requests (or one native batch, e.g. Soul `batch_size`), polls every `STUDIO_POLL_MS` (4 s) up to 10 minutes, tolerates two failed status checks per request, stores each returned URL as a `media_assets` row (`metadata.source='studio'`, tags `studio` + model), then records one `usage_events` row (`provider='higgsfield'`, units = outputs, cost = admin-set price × outputs). It throws only when nothing was produced; partial success completes with warnings.
+- **Simulated mode.** With no key or no base URL, requests are fabricated and "complete" after three polls with placeholder media, flagged `simulated` everywhere; nothing is billed.
+- **Workflows.** The `generate` node calls the same function inside a workflow run (media is attached to the workflow; spend is recorded against it). The "Higgsfield" trigger now reads the most recent Studio results from the database.
+- **Result URLs** are the platform's CDN links and may expire; download anything you need to keep.

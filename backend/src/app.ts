@@ -15,6 +15,7 @@ import { prompts } from './routes/prompts';
 import { runs } from './routes/runs';
 import { search } from './routes/search';
 import { settings, team } from './routes/settings';
+import { studio } from './routes/studio';
 import { workflows } from './routes/workflows';
 
 export function createApp() {
@@ -64,6 +65,7 @@ export function createApp() {
   const runLimiter = config.isTest ? (_q: any, _r: any, n: any) => n() : rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true, legacyHeaders: false });
   api.use('/prompts/run', runLimiter);
   api.use('/prompts/compare', runLimiter);
+  api.use('/studio/generate', runLimiter);
   api.use(/^\/workflows\/[^/]+\/run$/, runLimiter);
 
   api.use('/dashboard', dashboard);
@@ -71,6 +73,7 @@ export function createApp() {
   api.use('/workflows', workflows);
   api.use('/runs', runs);
   api.use('/media', media);
+  api.use('/studio', studio);
   api.use('/monitoring', monitoring);
   api.use('/settings', settings);
   api.use('/team', team);

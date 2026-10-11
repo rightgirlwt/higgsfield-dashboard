@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Bell, Brain, CheckCircle2, CircleDot, Flag, Play, Save, Shuffle, Trash2, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Bell, Brain, CheckCircle2, CircleDot, Flag, Play, Save, Shuffle, Sparkles, Trash2, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
   addEdge,
@@ -22,7 +22,7 @@ import { Badge, Button, Card, CardHeader, cx, ErrorState, Field, Input, Modal, S
 import { api, errorMessage } from '../lib/api';
 import { dateTime, ms, timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
-import type { ModelInfo, NodeType, Run, RunLog, ValidationIssue, Workflow, WorkflowDefinition } from '../lib/types';
+import type { ModelInfo, NodeType, Run, RunLog, StudioCatalog, ValidationIssue, Workflow, WorkflowDefinition } from '../lib/types';
 import { useRealtime } from '../state/Realtime';
 import { useToast } from '../state/Toast';
 
@@ -37,6 +37,7 @@ interface NData {
 const META: Record<NodeType, { label: string; icon: typeof Zap; ring: string; chip: string; blurb: string }> = {
   trigger: { label: 'Trigger', icon: Zap, ring: 'border-emerald-500/60', chip: 'bg-emerald-500/15 text-emerald-300', blurb: 'Input source' },
   llm: { label: 'LLM', icon: Brain, ring: 'border-violet-500/60', chip: 'bg-violet-500/15 text-violet-300', blurb: 'Claude prompt' },
+  generate: { label: 'Generate', icon: Sparkles, ring: 'border-pink-500/60', chip: 'bg-pink-500/15 text-pink-300', blurb: 'Higgsfield image/video' },
   transform: { label: 'Transform', icon: Shuffle, ring: 'border-cyan-500/60', chip: 'bg-cyan-500/15 text-cyan-300', blurb: 'Reshape data' },
   action: { label: 'Action', icon: Bell, ring: 'border-amber-500/60', chip: 'bg-amber-500/15 text-amber-300', blurb: 'Save / notify' },
   output: { label: 'Output', icon: Flag, ring: 'border-sky-500/60', chip: 'bg-sky-500/15 text-sky-300', blurb: 'Result' },
@@ -45,9 +46,11 @@ const META: Record<NodeType, { label: string; icon: typeof Zap; ring: string; ch
 function summary(type: NodeType, d: NData): string {
   switch (type) {
     case 'trigger':
-      return d.source === 'schedule' ? `Every ${d.intervalMinutes ?? 60} min` : d.source === 'higgsfield' ? 'Higgsfield API' : 'Manual';
+      return d.source === 'schedule' ? `Every ${d.intervalMinutes ?? 60} min` : d.source === 'higgsfield' ? 'Recent Studio results' : 'Manual';
     case 'llm':
       return d.model || 'default model';
+    case 'generate':
+      return d.model || 'pick a model';
     case 'transform':
       return d.mode || 'template';
     case 'action':
@@ -85,11 +88,12 @@ function FlowNode({ type, data, selected }: NodeProps<NData>) {
     </div>
   );
 }
-const nodeTypes = { trigger: FlowNode, llm: FlowNode, transform: FlowNode, action: FlowNode, output: FlowNode };
+const nodeTypes = { trigger: FlowNode, llm: FlowNode, generate: FlowNode, transform: FlowNode, action: FlowNode, output: FlowNode };
 
 const DEFAULT_DATA: Record<NodeType, NData> = {
   trigger: { label: 'Trigger', source: 'manual' },
   llm: { label: 'Claude prompt', userPrompt: 'Summarize:\n\n{{input}}', maxTokens: 512 },
+  generate: { label: 'Generate media', model: 'soul-2', prompt: '{{input}}', count: 1 },
   transform: { label: 'Transform', mode: 'template', template: '{{input}}' },
   action: { label: 'Action', action: 'log', message: '{{input}}' },
   output: { label: 'Output' },
@@ -135,6 +139,7 @@ function Builder({ initial }: { initial: Workflow }) {
   const canWrite = useCan('user');
   const { jobs, logs: liveLogs } = useRealtime();
   const models = useApi<ModelInfo[]>('/models');
+  const studioCatalog = useApi<StudioCatalog>('/studio/models');
   useDocumentTitle(initial.name);
 
   const [name, setName] = useState(initial.name);
@@ -373,7 +378,7 @@ function Builder({ initial }: { initial: Workflow }) {
           <Card className="p-4">
             <CardHeader eyebrow="Inspector" title={sel ? `${META[sel.type as NodeType].label} node` : 'Select a node'} />
             {sel ? (
-              <Inspector node={sel} models={models.data ?? []} disabled={!canWrite} onChange={(p) => patchNode(sel.id, p)} onDelete={() => deleteNode(sel.id)} />
+              <Inspector node={sel} models={models.data ?? []} studioCatalog={studioCatalog.data} disabled={!canWrite} onChange={(p) => patchNode(sel.id, p)} onDelete={() => deleteNode(sel.id)} />
             ) : (
               <p className="text-sm text-slate-500">Click a node to configure it. Use <code>{'{{input}}'}</code> in prompts to reference the previous node’s output, or <code>{'{{nodes.<id>.output}}'}</code> for any earlier node.</p>
             )}
@@ -470,7 +475,7 @@ function Builder({ initial }: { initial: Workflow }) {
   );
 }
 
-function Inspector({ node, models, disabled, onChange, onDelete }: { node: Node<NData>; models: ModelInfo[]; disabled: boolean; onChange: (p: Partial<NData>) => void; onDelete: () => void }) {
+function Inspector({ node, models, studioCatalog, disabled, onChange, onDelete }: { node: Node<NData>; models: ModelInfo[]; studioCatalog: StudioCatalog | null; disabled: boolean; onChange: (p: Partial<NData>) => void; onDelete: () => void }) {
   const d = node.data;
   const t = node.type as NodeType;
   const model = models.find((m) => m.id === d.model);
@@ -486,7 +491,7 @@ function Inspector({ node, models, disabled, onChange, onDelete }: { node: Node<
             <Select id="i-src" disabled={disabled} value={d.source ?? 'manual'} onChange={(e) => onChange({ source: e.target.value })}>
               <option value="manual">Manual / API input</option>
               <option value="schedule">Scheduled</option>
-              <option value="higgsfield">Higgsfield API (recent generations)</option>
+              <option value="higgsfield">Recent Studio generations</option>
             </Select>
           </Field>
           {d.source === 'schedule' && (
@@ -520,6 +525,32 @@ function Inspector({ node, models, disabled, onChange, onDelete }: { node: Node<
             <Input id="i-max" type="number" min={1} disabled={disabled} value={d.maxTokens ?? 512} onChange={(e) => onChange({ maxTokens: Math.max(1, Number(e.target.value) || 1) })} />
           </Field>
           {model && !model.supportsTemperature && <p className="text-xs text-slate-500">{model.label} ignores temperature.</p>}
+        </>
+      )}
+
+      {t === 'generate' && (
+        <>
+          <Field label="Model" htmlFor="i-gmodel" hint={studioCatalog && !studioCatalog.connected ? 'Studio isn’t connected to Higgsfield yet, so runs produce placeholders.' : undefined}>
+            <Select id="i-gmodel" disabled={disabled} value={d.model ?? ''} onChange={(e) => onChange({ model: e.target.value, settings: {} })}>
+              <option value="" disabled>Choose a model…</option>
+              {studioCatalog?.models.map((m) => <option key={m.id} value={m.id}>{m.label} ({m.surface})</option>)}
+            </Select>
+          </Field>
+          <Field label="Prompt" htmlFor="i-gprompt" hint={<>Use <code>{'{{input}}'}</code> for the previous node’s output.</>}>
+            <Textarea id="i-gprompt" rows={4} disabled={disabled} value={d.prompt ?? ''} onChange={(e) => onChange({ prompt: e.target.value })} />
+          </Field>
+          {studioCatalog?.models.find((m) => m.id === d.model && (m.roles.start ?? 0) > 0) && (
+            <Field label="Start frame URL (optional)" htmlFor="i-gstart"><Input id="i-gstart" disabled={disabled} value={d.startUrl ?? ''} placeholder="https://… or {{input}}" onChange={(e) => onChange({ startUrl: e.target.value })} /></Field>
+          )}
+          {studioCatalog?.models.find((m) => m.id === d.model && (m.roles.end ?? 0) > 0) && (
+            <Field label="End frame URL (optional)" htmlFor="i-gend"><Input id="i-gend" disabled={disabled} value={d.endUrl ?? ''} onChange={(e) => onChange({ endUrl: e.target.value })} /></Field>
+          )}
+          {studioCatalog?.models.find((m) => m.id === d.model && !m.nativeBatch) && (
+            <Field label="How many" htmlFor="i-gcount">
+              <Select id="i-gcount" disabled={disabled} value={d.count ?? 1} onChange={(e) => onChange({ count: Number(e.target.value) })}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}</Select>
+            </Field>
+          )}
+          <p className="text-xs text-slate-500">Other settings use each model’s defaults. Results are saved to the media timeline and passed on as <code>{'{ assets: [{ url, type }] }'}</code>.</p>
         </>
       )}
 

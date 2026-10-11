@@ -4,13 +4,14 @@ import { placeholderImage } from '../lib/placeholder';
 import { render, stringify } from '../lib/template';
 import { createAlert } from './alerts';
 import { runPrompt } from './claude';
-import { fetchGenerations } from './higgsfield';
 import type { Work } from './jobs';
 import { getDefaults } from './settings';
+import { runStudioGeneration } from './studio';
+import { getStudioModel } from './studioCatalog';
 import { runTransform, type TransformConfig } from './transform';
 import { recordUsage } from './usage';
 
-export const NODE_TYPES = ['trigger', 'llm', 'transform', 'action', 'output'] as const;
+export const NODE_TYPES = ['trigger', 'llm', 'generate', 'transform', 'action', 'output'] as const;
 export type NodeType = (typeof NODE_TYPES)[number];
 
 export interface WfNode {
@@ -68,6 +69,10 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationIssue[] {
     if (n.type === 'llm') {
       if (!String(n.data.userPrompt ?? '').trim()) err('LLM node needs a user prompt', n.id);
       if (n.data.model && !getModel(n.data.model)) err(`Unknown model "${n.data.model}"`, n.id);
+    }
+    if (n.type === 'generate') {
+      if (!String(n.data.prompt ?? '').trim()) err('Generate node needs a prompt', n.id);
+      if (!n.data.model || !getStudioModel(n.data.model)) err('Generate node needs a valid Studio model', n.id);
     }
     if (n.type === 'transform' && n.data.mode === 'regex_extract' && !n.data.pattern) err('Regex transform needs a pattern', n.id);
     if (n.type === 'transform' && n.data.mode === 'pick' && !n.data.path) err('Pick transform needs a path', n.id);
@@ -165,12 +170,13 @@ export function workflowWork(orgId: string, wf: WorkflowRecord, runInput: Record
         case 'trigger': {
           const source = node.data.source ?? 'manual';
           if (source === 'higgsfield') {
-            const gens = await fetchGenerations(orgId, 5);
-            if (gens.simulated) {
-              totals.simulated = true;
-              await log('warn', 'Higgsfield API not configured — using simulated generations', id);
-            }
-            out = JSON.stringify(gens.items, null, 2);
+            // Recent generations made in Studio (our own history; no extra platform call needed).
+            const { rows } = await getDb().query(
+              `SELECT type, title, url, created_at FROM media_assets WHERE org_id=$1 AND metadata->>'source'='studio' AND url NOT LIKE 'data:%'
+               ORDER BY created_at DESC LIMIT 5`,
+              [orgId],
+            );
+            out = JSON.stringify(rows.map((r) => ({ type: r.type, title: r.title, url: r.url, createdAt: new Date(r.created_at).toISOString() })), null, 2);
           } else {
             out = runInput.text ?? runInput.input ?? node.data.sampleInput ?? '';
           }
@@ -197,6 +203,30 @@ export function workflowWork(orgId: string, wf: WorkflowRecord, runInput: Record
           if (r.simulated) await log('warn', 'No Anthropic key configured — simulated response', id);
           await log('info', `${r.model}: ${r.inputTokens} in / ${r.outputTokens} out, $${r.costUsd.toFixed(5)}`, id);
           out = r.text;
+          break;
+        }
+        case 'generate': {
+          const prompt = render(String(node.data.prompt ?? ''), vars);
+          if (prompt.missing.length) await log('warn', `Unresolved variables: ${prompt.missing.join(', ')}`, id);
+          const urlOrNone = (v: unknown) => {
+            const s = render(String(v ?? ''), vars).text.trim();
+            return s ? [s] : undefined;
+          };
+          const r = await runStudioGeneration(
+            orgId,
+            { runId, log: (level, msg, nid, data) => log(level, msg, nid ?? id, data) },
+            {
+              modelId: node.data.model,
+              prompt: prompt.text,
+              settings: node.data.settings ?? {},
+              media: { ...(urlOrNone(node.data.startUrl) ? { start: urlOrNone(node.data.startUrl) } : {}), ...(urlOrNone(node.data.endUrl) ? { end: urlOrNone(node.data.endUrl) } : {}) },
+              count: Number(node.data.count) || 1,
+              workflowId: wf.id,
+            },
+          );
+          totals.costUsd += r.costUsd;
+          totals.simulated ||= r.simulated;
+          out = { assets: r.assets.map((a) => ({ id: a.id, type: a.type, url: a.url })), failures: r.failures };
           break;
         }
         case 'transform':

@@ -1,6 +1,6 @@
 import { connectedOrgIds, emitToOrg, getDb } from '../ctx';
 import { logger } from '../logger';
-import { isLive } from './higgsfield';
+import { getHfConfig } from './higgsfield';
 import { getSecret } from './secrets';
 
 export interface MonitoringSnapshot {
@@ -58,7 +58,7 @@ export async function snapshot(orgId: string): Promise<MonitoringSnapshot> {
     tokensLastHour: runs.rows[0].tokens,
     spendToday: spend.rows[0].s,
     claudeConfigured: !!(await getSecret(orgId, 'anthropic')),
-    higgsfieldConfigured: await isLive(orgId),
+    higgsfieldConfigured: (await getHfConfig(orgId)) !== null,
     lastUpdated: new Date().toISOString(),
   };
 }

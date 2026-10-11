@@ -12,7 +12,7 @@ runs.get(
   wrap(async (req, res) => {
     const params: unknown[] = [req.user!.orgId];
     let where = 'org_id = $1';
-    if (['prompt', 'workflow'].includes(String(req.query.kind))) (params.push(req.query.kind), (where += ` AND kind = $${params.length}`));
+    if (['prompt', 'workflow', 'generation'].includes(String(req.query.kind))) (params.push(req.query.kind), (where += ` AND kind = $${params.length}`));
     if (['queued', 'running', 'completed', 'failed', 'cancelled'].includes(String(req.query.status))) (params.push(req.query.status), (where += ` AND status = $${params.length}`));
     if (isUuid(req.query.workflowId)) (params.push(req.query.workflowId), (where += ` AND ref_id = $${params.length}`));
     params.push(Math.min(Number(req.query.limit) || 50, 200));

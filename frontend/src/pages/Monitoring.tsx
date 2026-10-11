@@ -224,7 +224,7 @@ export default function Monitoring() {
               <option value="">All levels</option><option value="error">Errors</option><option value="warn">Warnings</option><option value="info">Info</option><option value="debug">Debug</option>
             </Select>
             <Select aria-label="Type" value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="">All types</option><option value="prompt">Prompts</option><option value="workflow">Workflows</option>
+              <option value="">All types</option><option value="prompt">Prompts</option><option value="workflow">Workflows</option><option value="generation">Studio generations</option>
             </Select>
             <Select aria-label="Run status" value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="">Any status</option><option value="running">Running</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="queued">Queued</option>

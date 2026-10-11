@@ -39,6 +39,11 @@ export const config = {
   secretsKey: env.SECRETS_ENCRYPTION_KEY ?? '',
   seedDemo: bool(env.SEED_DEMO_DATA, !isProd),
   queueConcurrency: Number(env.QUEUE_CONCURRENCY ?? 2),
+  /** Parallel image/video generations (mostly idle polling, so this can be generous). */
+  generationConcurrency: Number(env.GENERATION_CONCURRENCY ?? 8),
+  /** How often to ask Higgsfield for status, and how long to wait before giving up. */
+  studioPollMs: Number(env.STUDIO_POLL_MS ?? (nodeEnv === 'test' ? 15 : 4000)),
+  studioDeadlineMs: Number(env.STUDIO_DEADLINE_MS ?? 600_000),
   logLevel: env.LOG_LEVEL ?? (isProd ? 'info' : 'debug'),
 };
 

@@ -185,6 +185,15 @@ CREATE INDEX alerts_org_idx ON alerts(org_id, created_at DESC);
 CREATE UNIQUE INDEX alerts_once_per_period ON alerts(org_id, kind, period) WHERE period IS NOT NULL;
 `,
   },
+  {
+    version: 2,
+    name: 'studio_generation_runs',
+    sql: `
+ALTER TABLE job_runs DROP CONSTRAINT IF EXISTS job_runs_kind_check;
+ALTER TABLE job_runs ADD CONSTRAINT job_runs_kind_check CHECK (kind IN ('prompt','workflow','generation'));
+CREATE INDEX media_source_idx ON media_assets (org_id, (metadata->>'source'), created_at DESC);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {
