@@ -1,0 +1,14 @@
+{
+  "name": "higgsfield-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Higgsfield dashboard and studio: spend, prompt engineering with Claude, workflows, media timeline, monitoring.",
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "test": "npm --prefix backend test",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build"
+  }
+}

@@ -5,13 +5,12 @@
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
-  font-weight: 400;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #020817;
+  color-scheme: dark;
+  color: #e2e8f0;
+  background-color: #020617;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 html {
@@ -23,9 +22,9 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 28%),
-    radial-gradient(circle at right, rgba(168, 85, 247, 0.12), transparent 20%),
-    #020817;
+    radial-gradient(circle at top, rgba(34, 211, 238, 0.1), transparent 28%),
+    radial-gradient(circle at right, rgba(168, 85, 247, 0.1), transparent 20%),
+    #020617;
 }
 
 * {
@@ -35,7 +34,78 @@ body {
 button {
   cursor: pointer;
 }
+button:disabled {
+  cursor: not-allowed;
+}
 
-#root {
-  min-height: 100vh;
+/* Visible keyboard focus everywhere (WCAG 2.4.7) */
+:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Slim dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+/* React Flow ships default boxes for node types named input/output/default; our custom nodes use
+   those names, so neutralise the built-in chrome (higher specificity than the library CSS). */
+.react-flow .react-flow__node.react-flow__node-input,
+.react-flow .react-flow__node.react-flow__node-output,
+.react-flow .react-flow__node.react-flow__node-default {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  width: auto;
+  border-radius: 0;
+  box-shadow: none;
+  color: inherit;
+}
+.react-flow .react-flow__minimap {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+}
+
+/* React Flow dark theme tweaks */
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__controls button {
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+  fill: #cbd5e1;
+}
+.react-flow__controls button:hover {
+  background: #1e293b;
+}
+.react-flow__minimap {
+  background: #0f172a;
+}
+.react-flow__edge-path {
+  stroke: #64748b;
+  stroke-width: 2;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #22d3ee;
+}
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: #22d3ee;
+  border: 2px solid #0f172a;
 }
