@@ -3,22 +3,37 @@
 @tailwind utilities;
 
 :root {
-  font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: rgba(255, 255, 255, 0.87);
-  background: #07111f;
+  background-color: #020817;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: radial-gradient(circle at top, #12263f 0%, #07111f 50%, #040b16 100%);
+  background:
+    radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 28%),
+    radial-gradient(circle at right, rgba(168, 85, 247, 0.12), transparent 20%),
+    #020817;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  cursor: pointer;
 }
 
 #root {
