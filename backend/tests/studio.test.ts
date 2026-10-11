@@ -191,7 +191,14 @@ describe('studio API (against a fake Higgsfield platform)', () => {
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: fake.url + '/' } })).json.baseUrl).toBe(fake.url);
     // URL alone is not enough - a key is required too
     expect((await call('GET', '/studio/models', { as: 'viewer' })).json.connected).toBe(false);
+    // Malformed Higgsfield keys are refused at save time (missing colon, extra part, whitespace)
+    for (const bad of ['justonepartvalue', 'id:extra:secretvalue', 'id: secret value', 'id:\nsecretvalue']) {
+      expect((await call('PUT', '/settings/secrets/higgsfield', { as: 'admin', body: { value: bad } })).status).toBe(400);
+    }
     expect((await call('PUT', '/settings/secrets/higgsfield', { as: 'admin', body: { value: 'key-id:secret-value' } })).status).toBe(200);
+    const shape = (await call('GET', '/settings/secrets', { as: 'admin' })).json.find((s: any) => s.name === 'higgsfield');
+    expect(shape).toMatchObject({ formatOk: true, last4: 'alue' });
+    expect(JSON.stringify(shape)).not.toContain('secret-value');
     const m = (await call('GET', '/studio/models', { as: 'viewer' })).json;
     expect(m.connected).toBe(true);
     expect(JSON.stringify(m)).not.toContain('secret-value');

@@ -8,7 +8,7 @@ import { getModel, MODELS } from '../lib/pricing';
 import { getBaseUrl, normalizeBaseUrl } from '../services/higgsfield';
 import { getPrices, setPrices } from '../services/studio';
 import { getStudioModel } from '../services/studioCatalog';
-import { deleteSecret, getSecret, listSecretStatus, SECRET_NAMES, setSecret, type SecretName } from '../services/secrets';
+import { deleteSecret, getSecret, HIGGSFIELD_KEY_RE, listSecretStatus, SECRET_NAMES, setSecret, type SecretName } from '../services/secrets';
 import { getDefaults, getSetting, getStorage, putSetting } from '../services/settings';
 import { uuidParam } from './util';
 
@@ -133,7 +133,11 @@ settings.put(
   wrap(async (req, res) => {
     const name = secretName(req.params.name);
     const { value } = z.object({ value: z.string().min(8).max(500) }).parse(req.body);
-    await setSecret(req.user!.orgId, name, value.trim());
+    const clean = value.trim();
+    if (name === 'higgsfield' && !HIGGSFIELD_KEY_RE.test(clean)) {
+      throw badRequest('A Higgsfield key must be exactly two parts, ID:SECRET, with a single colon between them and no spaces or line breaks. If you pasted more than two parts (for example an extra ID in front), remove the extra piece.');
+    }
+    await setSecret(req.user!.orgId, name, clean);
     res.json((await listSecretStatus(req.user!.orgId)).find((s) => s.name === name));
   }),
 );

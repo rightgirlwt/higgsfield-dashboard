@@ -237,6 +237,8 @@ export interface SecretStatus {
   source: 'stored' | 'environment' | 'none';
   last4: string | null;
   updatedAt: string | null;
+  format?: string;
+  formatOk?: boolean;
 }
 
 export interface TeamUser {

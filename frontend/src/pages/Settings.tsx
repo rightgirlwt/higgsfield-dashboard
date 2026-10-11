@@ -127,6 +127,11 @@ function Keys() {
                 )}
               </div>
               <p className="mb-3 text-xs text-slate-500">{m.hint}{s.updatedAt && ` Updated ${timeAgo(s.updatedAt)}.`}</p>
+              {s.format && (
+                <p className={`mb-3 text-xs ${s.formatOk ? 'text-emerald-300' : 'text-amber-300'}`}>
+                  Saved key shape: {s.format}{s.formatOk ? '' : ' — this will be rejected by Higgsfield; paste it again as ID:SECRET'}
+                </p>
+              )}
               <div className="flex flex-wrap items-end gap-2">
                 <div className="min-w-0 flex-1">
                   <Field label={s.configured ? 'Replace key' : 'Key'} htmlFor={`k-${s.name}`}>
