@@ -61,10 +61,10 @@ export async function getHfConfig(orgId: string): Promise<HfConfig | null> {
   return key && baseUrl ? { key, baseUrl } : null;
 }
 
-async function call(cfg: HfConfig, method: 'GET' | 'POST', path: string, body?: unknown): Promise<any> {
+async function call(cfg: HfConfig, method: 'GET' | 'POST', path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<any> {
   const res = await fetch(`${cfg.baseUrl}${path}`, {
     method,
-    headers: { Authorization: `Key ${cfg.key}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), Accept: 'application/json' },
+    headers: { Authorization: `Key ${cfg.key}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), Accept: 'application/json', ...extraHeaders },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
@@ -76,7 +76,12 @@ async function call(cfg: HfConfig, method: 'GET' | 'POST', path: string, body?: 
     payload = text;
   }
   if (!res.ok) {
-    const detail = typeof payload?.detail === 'string' ? payload.detail : typeof payload === 'string' ? payload.slice(0, 200) : '';
+    // Surface whatever the platform says (string detail, structured detail, or raw text) without ever echoing our key.
+    const detail =
+      typeof payload?.detail === 'string' ? payload.detail
+      : typeof payload === 'string' ? payload.slice(0, 200)
+      : payload ? JSON.stringify(payload.detail ?? payload.error ?? payload).slice(0, 300)
+      : '';
     throw new HiggsfieldError(res.status, `Higgsfield API responded ${res.status}${detail ? `: ${detail}` : ''}`);
   }
   return payload;
@@ -84,7 +89,8 @@ async function call(cfg: HfConfig, method: 'GET' | 'POST', path: string, body?: 
 
 export async function submit(cfg: HfConfig, modelPath: string, body: Record<string, unknown>): Promise<{ requestId: string; status: string }> {
   if (!MODEL_PATH.test(modelPath) || modelPath.includes('..')) throw new HiggsfieldError(400, 'Invalid model path');
-  const r = await call(cfg, 'POST', `/${modelPath}`, body);
+  // Higgsfield recommends an Idempotency-Key on every submission so a retry can't create a duplicate.
+  const r = await call(cfg, 'POST', `/${modelPath}`, body, { 'Idempotency-Key': crypto.randomUUID() });
   if (!r || typeof r.request_id !== 'string' || !r.request_id) throw new HiggsfieldError(502, 'Higgsfield response was missing request_id');
   return { requestId: r.request_id, status: typeof r.status === 'string' ? r.status : 'queued' };
 }

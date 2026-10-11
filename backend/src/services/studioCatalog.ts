@@ -86,8 +86,8 @@ export const STUDIO_MODELS: StudioModel[] = [
     description: 'Photoreal image generation.',
     roles: {},
     settings: soulSettings,
-    verified: false,
-    note: 'Aspect-ratio options are a best guess.',
+    verified: true,
+    note: 'Path and fields match Higgsfield’s own Soul 2 example. The list of aspect ratios is a best guess (the example uses 4:3).',
     build: soulBuild('higgsfield-ai/soul/v2/standard'),
   },
   {
