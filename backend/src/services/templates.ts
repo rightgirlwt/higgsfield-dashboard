@@ -73,7 +73,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: 'render-board-cards',
     name: 'Render board cards',
-    description: 'Project workflow: generates every draft or ready card on the board with its own model and settings, and moves each to review. Shows the total cost before it runs.',
+    description: 'Nothing to fill in. It takes the cards on your board (each already has its own prompt, model and settings) and renders them, then moves each to “review”. The same as selecting cards on the board and pressing Generate, but repeatable.',
     category: 'Projects',
     definition: {
       nodes: [
@@ -90,7 +90,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: 'polish-then-render',
     name: 'Polish prompts with Claude, then render',
-    description: 'Project workflow: Claude rewrites each card’s prompt using the project’s visual style and characters, then every polished prompt is generated.',
+    description: 'Nothing to fill in. Claude reads your board cards plus the visual style and characters from your story bible, rewrites each prompt to be more consistent, and then renders them all.',
     category: 'Projects',
     definition: {
       nodes: [
@@ -116,7 +116,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: 'ad-hooks-to-images',
     name: 'Ad hooks to images',
-    description: 'Paste product notes; Claude writes five distinct ad concepts, and each becomes an image. A cheap way to explore directions before spending on video.',
+    description: 'When you run it, paste a few lines about the product. Claude writes five different ad ideas and each becomes an image. A cheap way to explore directions before spending on video.',
     category: 'Projects',
     definition: {
       nodes: [

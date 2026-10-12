@@ -8,6 +8,7 @@ import { BriefPanel } from '../components/project/BriefPanel';
 import { ChatPanel } from '../components/project/ChatPanel';
 import { GenerateDialog } from '../components/project/GenerateDialog';
 import { ItemEditor } from '../components/project/ItemEditor';
+import { StartHere } from '../components/project/StartHere';
 import { VariantDialog } from '../components/project/VariantDialog';
 import { Badge, Button, Card, cx, EmptyState, ErrorState, Modal, PageHeader, ProgressBar, Skeleton } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
@@ -81,6 +82,12 @@ export default function Project() {
     }
   };
 
+  const [outbox, setOutbox] = useState<{ id: number; text: string } | null>(null);
+  /** Sends a message through the Director chat (and brings the chat into view on small screens). */
+  const askDirector = useCallback((text: string) => {
+    setOutbox({ id: Date.now(), text });
+    if (window.innerWidth < 1024) setTab('chat');
+  }, []);
   const [exportOpen, setExportOpen] = useState(false);
   const closeExport = useCallback(() => setExportOpen(false), []);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -131,7 +138,7 @@ export default function Project() {
     { id: 'board', label: `${type.itemLabel} board (${snap.items.length})` },
     { id: 'brief', label: type.id === 'micro_drama' ? 'Story bible' : 'Brand kit' },
     { id: 'assets', label: `Assets (${snap.assets.length})` },
-    { id: 'workflows', label: `Workflows (${snap.workflows.length})` },
+    { id: 'workflows', label: `Automations${snap.workflows.length ? ` (${snap.workflows.length})` : ''} · optional` },
     { id: 'chat', label: 'Chat', icon: MessageSquare, mobileOnly: true },
   ];
 
@@ -170,6 +177,8 @@ export default function Project() {
         </div>
       </Card>
 
+      <StartHere snap={snap} setTab={setTab} onAsk={askDirector} onExport={() => setExportOpen(true)} canWrite={canWrite} />
+
       <div role="tablist" aria-label="Project sections" className="mb-5 flex flex-wrap gap-1 rounded-xl border border-slate-800 bg-slate-950/60 p-1">
         {tabs.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className={cx('inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition', t.mobileOnly && 'lg:hidden', tab === t.id ? 'bg-slate-900 text-slate-100 shadow-sm' : 'text-slate-400 hover:text-slate-100')}>
@@ -181,14 +190,17 @@ export default function Project() {
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_25rem]">
         <div className={cx('min-w-0', tab === 'chat' && 'hidden lg:block')}>
           {tab === 'board' && (
-            <Board snap={snap} catalog={catalog} selected={selected} onSelect={select} onOpen={(i) => setEditingId(i.id)} onGenerate={setGenerating} onAdd={(g) => void addItem(g)} canWrite={canWrite} />
+            <Board snap={snap} catalog={catalog} selected={selected} onSelect={select} onOpen={(i) => setEditingId(i.id)} onGenerate={setGenerating} onAdd={(g) => void addItem(g)} onAsk={() => askDirector(type.id === 'micro_drama' ? 'Draft the shot list for episode 1 from my story bible, using inexpensive models, and tell me the cost.' : 'Draft three ad concepts with one ad unit each from my brand kit, using inexpensive models, and tell me the cost.')} canWrite={canWrite} />
           )}
-          {tab === 'brief' && <BriefPanel snap={snap} onSaved={reload} />}
+          {tab === 'brief' && <BriefPanel snap={snap} onSaved={reload} onAsk={askDirector} />}
           {tab === 'assets' && <AssetsPanel projectId={project.id} assets={snap.assets} connected={!!catalog?.connected} onChanged={reload} />}
           {tab === 'workflows' && (
             <div>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <p className="max-w-2xl text-sm text-slate-400">Workflows run steps automatically: write with Claude, generate, save. Ask the Director to build one, or start a blank one.</p>
+                <div className="max-w-2xl space-y-1 text-sm text-slate-400">
+                  <p><strong className="text-slate-200">You don’t need these to make things.</strong> Writing prompts and generating happens on the board, using what you put in the {type.id === 'micro_drama' ? 'story bible' : 'brand kit'} and on each card.</p>
+                  <p>Automations are for repeating a chain of steps (for example: have Claude rewrite every prompt, then render them all). You don’t type your content into one; it reads the board and the brief. Each one shows its cost and asks you before it spends anything.</p>
+                </div>
                 {canWrite && <Button variant="primary" onClick={() => void newWorkflow()}><Plus className="h-4 w-4" aria-hidden /> New workflow</Button>}
               </div>
               {canWrite && templates.data && templates.data.filter((t) => t.category === 'Projects').length > 0 && (
@@ -222,7 +234,7 @@ export default function Project() {
           )}
         </div>
         <aside className={cx('lg:sticky lg:top-4', tab === 'chat' ? 'block' : 'hidden lg:block')}>
-          <ChatPanel projectId={project.id} type={type} onChanged={onChat} onProgress={reload} className="h-[min(40rem,calc(100vh-9rem))]" />
+          <ChatPanel projectId={project.id} type={type} onChanged={onChat} onProgress={reload} outbox={outbox} className="h-[min(40rem,calc(100vh-9rem))]" />
         </aside>
       </div>
 

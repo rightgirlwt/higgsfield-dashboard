@@ -8,7 +8,7 @@ import { Button, Card, CardHeader, Field, Input, Select, Textarea } from '../ui'
 const ASPECTS = ['9:16', '16:9', '1:1', '4:5', '3:4', '4:3', '21:9'];
 
 /** The story bible / brand kit and the project's basic settings. The Director reads this on every turn, and can write to it. */
-export function BriefPanel({ snap, onSaved }: { snap: ProjectSnapshot; onSaved: () => void }) {
+export function BriefPanel({ snap, onSaved, onAsk }: { snap: ProjectSnapshot; onSaved: () => void; onAsk: (text: string) => void }) {
   const toast = useToast();
   const canWrite = useCan('user');
   const { project, type } = snap;
@@ -68,7 +68,12 @@ export function BriefPanel({ snap, onSaved }: { snap: ProjectSnapshot; onSaved: 
       </Card>
 
       <Card className="p-5">
-        <CardHeader eyebrow="The Director reads this every time" title={type.id === 'micro_drama' ? 'Story bible' : 'Brand kit'} />
+        <CardHeader
+          eyebrow="Background the Director reads every time"
+          title={type.id === 'micro_drama' ? 'Story bible' : 'Brand kit'}
+          action={canWrite && <Button variant="primary" onClick={() => onAsk(type.id === 'micro_drama' ? 'Ask me a few questions about my story, then fill in the whole story bible for me.' : 'Ask me a few questions about the brand and product, then fill in the whole brand kit for me.')}>Fill this in with the Director</Button>}
+        />
+        <p className="-mt-2 mb-4 max-w-2xl text-sm text-slate-500">You don’t have to write all of this. Even a sentence or two in the first box is enough to start, or press the button and answer a few questions. Nothing here is sent to Higgsfield by itself; it just helps the Director write better prompts.</p>
         <div className="grid gap-4 lg:grid-cols-2">
           {type.briefFields.map((f) => (
             <Field key={f.key} label={f.label} htmlFor={`br-${f.key}`}>

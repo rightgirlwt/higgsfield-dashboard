@@ -37,7 +37,7 @@ function Thumb({ item, aspect, surface }: { item: BoardItem; aspect: string; sur
 }
 
 export function Board({
-  snap, catalog, selected, onSelect, onOpen, onGenerate, onAdd, canWrite,
+  snap, catalog, selected, onSelect, onOpen, onGenerate, onAdd, onAsk, canWrite,
 }: {
   snap: ProjectSnapshot;
   catalog: StudioCatalog | null;
@@ -46,6 +46,7 @@ export function Board({
   onOpen: (item: BoardItem) => void;
   onGenerate: (items: BoardItem[]) => void;
   onAdd: (group: string) => void;
+  onAsk: () => void;
   canWrite: boolean;
 }) {
   const { items, type, project } = snap;
@@ -64,7 +65,7 @@ export function Board({
       <EmptyState
         title={`No ${label}s yet`}
         hint={`Ask the Director to draft the ${type.id === 'micro_drama' ? 'shot list' : 'ad units'} from your brief, or add one yourself.`}
-        action={canWrite ? <Button variant="primary" onClick={() => onAdd('')}><Plus className="h-4 w-4" aria-hidden /> Add {label}</Button> : undefined}
+        action={canWrite ? <div className="flex flex-wrap justify-center gap-2"><Button variant="primary" onClick={onAsk}>Ask the Director to draft them</Button><Button onClick={() => onAdd('')}><Plus className="h-4 w-4" aria-hidden /> Add one myself</Button></div> : undefined}
       />
     );
   }

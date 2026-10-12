@@ -18,7 +18,7 @@ const readModel = () => {
 };
 
 /** Chat with the Claude "Director". It edits the brief, board and workflows through tools, and can never start a paid generation. */
-export function ChatPanel({ projectId, type, onChanged, onProgress, className }: { projectId: string; type: ProjectTypeDef; onChanged: (c: ChatChanged) => void; onProgress?: () => void; className?: string }) {
+export function ChatPanel({ projectId, type, onChanged, onProgress, outbox, className }: { projectId: string; type: ProjectTypeDef; onChanged: (c: ChatChanged) => void; onProgress?: () => void; outbox?: { id: number; text: string } | null; className?: string }) {
   const canWrite = useCan('user');
   const history = useApi<{ messages: ChatMessage[] }>(`/projects/${projectId}/chat`);
   const models = useApi<ModelInfo[]>('/models');
@@ -81,6 +81,15 @@ export function ChatPanel({ projectId, type, onChanged, onProgress, className }:
       setBusy(false);
     }
   };
+
+  // A button elsewhere on the page (e.g. "Fill this in with the Director") can send a message through this chat.
+  const lastOutbox = useRef(0);
+  useEffect(() => {
+    if (outbox && outbox.id !== lastOutbox.current) {
+      lastOutbox.current = outbox.id;
+      void send(outbox.text);
+    }
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clear = async () => {
     if (!window.confirm('Clear this conversation? The brief and board stay as they are.')) return;
