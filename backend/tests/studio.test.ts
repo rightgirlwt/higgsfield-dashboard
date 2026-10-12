@@ -411,7 +411,16 @@ describe('workflow Generate node', () => {
     fake.script = 'image2';
     fake.seen.length = 0;
     const wf = (await call('POST', '/workflows', { as: 'user', body: { name: 'Gen WF', definition: def() } })).json;
-    const run = await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'a lighthouse' } } });
+    // A workflow that generates media must be confirmed with the cost the person was shown.
+    const est = (await call('POST', `/workflows/${wf.id}/estimate`, { as: 'user' })).json;
+    expect(est.steps).toHaveLength(1);
+    expect(est.totalUsd).toBeGreaterThan(0);
+    const refused = await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'a lighthouse' } } });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe('cost_confirmation_required');
+    expect((await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'a lighthouse' }, expectedTotalUsd: est.totalUsd / 2 } })).status).toBe(409);
+    expect(fake.seen.filter((s) => s.method === 'POST')).toHaveLength(0); // nothing was sent to Higgsfield
+    const run = await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'a lighthouse' }, expectedTotalUsd: est.totalUsd } });
     const done = await waitRun(run.json.run.id);
     expect(done.run.status).toBe('completed');
     expect(fake.seen.find((s) => s.method === 'POST')!.body.prompt).toBe('Photo of a lighthouse');
@@ -424,7 +433,7 @@ describe('workflow Generate node', () => {
     fake.seen.length = 0;
     const d = def({ model: 'kling-3-turbo', startUrl: 'https://img.test/{{input}}.png' });
     const wf = (await call('POST', '/workflows', { as: 'user', body: { name: 'Anim WF', definition: d } })).json;
-    const done = await waitRun((await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'cat' } } })).json.run.id);
+    const done = await waitRun((await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'cat' }, expectedTotalUsd: 5 } })).json.run.id);
     expect(done.run.status).toBe('completed');
     expect(fake.seen.find((s) => s.method === 'POST')!).toMatchObject({ url: '/kling-video/v3.0-turbo/image-to-video', body: { image_url: 'https://img.test/cat.png' } });
   });

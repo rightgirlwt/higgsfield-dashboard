@@ -71,6 +71,77 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     },
   },
   {
+    id: 'render-board-cards',
+    name: 'Render board cards',
+    description: 'Project workflow: generates every draft or ready card on the board with its own model and settings, and moves each to review. Shows the total cost before it runs.',
+    category: 'Projects',
+    definition: {
+      nodes: [
+        { id: 't', type: 'trigger', position: pos(0, 80), data: { label: 'Cards to render', source: 'project', statuses: ['draft', 'ready', 'rejected'] } },
+        { id: 'f', type: 'foreach', position: pos(300, 80), data: { label: 'Render each card', mode: 'cards', maxItems: 20, concurrency: 2 } },
+        { id: 'o', type: 'output', position: pos(600, 80), data: { label: 'Results' } },
+      ],
+      edges: [
+        { id: 'e1', source: 't', target: 'f' },
+        { id: 'e2', source: 'f', target: 'o' },
+      ],
+    },
+  },
+  {
+    id: 'polish-then-render',
+    name: 'Polish prompts with Claude, then render',
+    description: 'Project workflow: Claude rewrites each card’s prompt using the project’s visual style and characters, then every polished prompt is generated.',
+    category: 'Projects',
+    definition: {
+      nodes: [
+        { id: 't', type: 'trigger', position: pos(0, 80), data: { label: 'Cards to render', source: 'project', statuses: ['draft', 'ready', 'rejected'] } },
+        {
+          id: 'l', type: 'llm', position: pos(280, 80),
+          data: {
+            label: 'Polish prompts', model: 'claude-sonnet-5-5', maxTokens: 4000,
+            systemPrompt: 'You are a cinematographer who writes prompts for AI image and video models. Keep every prompt self-contained and visual: subject, action, setting, camera, light, mood.',
+            userPrompt: 'Visual style: {{project.brief.visualStyle}}\nCharacters: {{project.brief.characters}}\n\nHere are the cards as JSON:\n{{input}}\n\nRewrite each card\'s prompt so it repeats the characters and style consistently. Return ONLY a JSON array of objects with "id" (unchanged) and "prompt".',
+          },
+        },
+        { id: 'f', type: 'foreach', position: pos(580, 80), data: { label: 'Render each prompt', mode: 'prompt', model: 'wan-3', prompt: '{{item.prompt}}', settings: { aspect_ratio: '9:16' }, maxItems: 20, concurrency: 2 } },
+        { id: 'o', type: 'output', position: pos(880, 80), data: { label: 'Results' } },
+      ],
+      edges: [
+        { id: 'e1', source: 't', target: 'l' },
+        { id: 'e2', source: 'l', target: 'f' },
+        { id: 'e3', source: 'f', target: 'o' },
+      ],
+    },
+  },
+  {
+    id: 'ad-hooks-to-images',
+    name: 'Ad hooks to images',
+    description: 'Paste product notes; Claude writes five distinct ad concepts, and each becomes an image. A cheap way to explore directions before spending on video.',
+    category: 'Projects',
+    definition: {
+      nodes: [
+        { id: 't', type: 'trigger', position: pos(0, 80), data: { label: 'Product notes', source: 'manual', sampleInput: 'Reusable stainless steel water bottle, keeps drinks cold for 24 hours. Audience: busy commuters.' } },
+        {
+          id: 'l', type: 'llm', position: pos(280, 80),
+          data: {
+            label: 'Five concepts', model: 'claude-sonnet-5-5', maxTokens: 2000,
+            systemPrompt: 'You are an advertising creative director.',
+            userPrompt: 'Product notes:\n{{input}}\n\nWrite 5 distinct visual ad concepts. Return ONLY a JSON array of 5 objects, each with "prompt": a vivid image description (subject, setting, light, camera) with no text in the picture.',
+          },
+        },
+        { id: 'p', type: 'transform', position: pos(560, 80), data: { label: 'Parse JSON', mode: 'json_parse' } },
+        { id: 'f', type: 'foreach', position: pos(840, 80), data: { label: 'Make each image', mode: 'prompt', model: 'z-image-turbo', prompt: '{{item.prompt}}', maxItems: 5, concurrency: 2 } },
+        { id: 'o', type: 'output', position: pos(1120, 80), data: { label: 'Images' } },
+      ],
+      edges: [
+        { id: 'e1', source: 't', target: 'l' },
+        { id: 'e2', source: 'l', target: 'p' },
+        { id: 'e3', source: 'p', target: 'f' },
+        { id: 'e4', source: 'f', target: 'o' },
+      ],
+    },
+  },
+  {
     id: 'daily-digest',
     name: 'Daily generation digest',
     description: 'On a schedule, summarizes the latest Higgsfield activity and notifies the team.',

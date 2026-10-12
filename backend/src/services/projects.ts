@@ -343,7 +343,7 @@ async function frameFrom(orgId: string, projectId: string, sourceId: string): Pr
   return rows[0]?.url ?? null;
 }
 
-async function paramsForRun(orgId: string, item: ItemRow): Promise<GenerateParams> {
+export async function paramsForRun(orgId: string, item: ItemRow): Promise<GenerateParams> {
   const media = { ...item.media };
   const src = item.meta?.startFromItemId;
   if (src && !media.start?.length) {
@@ -357,18 +357,35 @@ async function paramsForRun(orgId: string, item: ItemRow): Promise<GenerateParam
   };
 }
 
+/** Runs one card's generation and keeps the card's status honest: review when media came back, draft (with the reason) when nothing did. */
+export async function generateCard(orgId: string, item: ItemRow, params: GenerateParams, ctx: Parameters<Work>[0]) {
+  const db = getDb();
+  try {
+    const r = await runStudioGeneration(orgId, ctx, params);
+    await db.query(`UPDATE project_items SET status='review', last_error=$2, updated_at=now() WHERE id=$1`, [item.id, r.failures.length ? `${r.failures.length} request(s) failed` : null]);
+    return r;
+  } catch (e) {
+    await db.query(`UPDATE project_items SET status='draft', last_error=$2, updated_at=now() WHERE id=$1`, [item.id, e instanceof Error ? e.message.slice(0, 500) : 'Generation failed']);
+    throw e;
+  }
+}
+
 function itemWork(orgId: string, item: ItemRow, params: GenerateParams): Work {
   return async (ctx) => {
-    const db = getDb();
-    try {
-      const r = await runStudioGeneration(orgId, ctx, params);
-      await db.query(`UPDATE project_items SET status='review', last_error=$2, updated_at=now() WHERE id=$1`, [item.id, r.failures.length ? `${r.failures.length} request(s) failed` : null]);
-      return { output: { assets: r.assets, failures: r.failures }, model: params.modelId, inputTokens: 0, outputTokens: 0, costUsd: r.costUsd, simulated: r.simulated };
-    } catch (e) {
-      await db.query(`UPDATE project_items SET status='draft', last_error=$2, updated_at=now() WHERE id=$1`, [item.id, e instanceof Error ? e.message.slice(0, 500) : 'Generation failed']);
-      throw e;
-    }
+    const r = await generateCard(orgId, item, params, ctx);
+    return { output: { assets: r.assets, failures: r.failures }, model: params.modelId, inputTokens: 0, outputTokens: 0, costUsd: r.costUsd, simulated: r.simulated };
   };
+}
+
+/** Cards a workflow works on: by status (and optionally scene/concept), in board order. */
+export async function selectCards(orgId: string, projectId: string, f: { statuses?: string[]; group?: string; limit?: number }): Promise<ItemRow[]> {
+  const statuses = (f.statuses?.length ? f.statuses : ['draft', 'ready', 'rejected']).filter((s): s is ItemStatus => (ITEM_STATUSES as readonly string[]).includes(s));
+  const { rows } = await getDb().query<ItemRow>(
+    `SELECT * FROM project_items WHERE org_id=$1 AND project_id=$2 AND status = ANY($3::text[]) AND ($4::text = '' OR group_name = $4)
+     ORDER BY position, created_at LIMIT $5`,
+    [orgId, projectId, statuses, f.group ?? '', Math.min(100, f.limit ?? 50)],
+  );
+  return rows;
 }
 
 export interface StartResult {
@@ -401,8 +418,9 @@ export async function startGeneration(
     const item = chosen.find((i) => i.id === first.itemId)!;
     throw badRequest(`Can't generate "${item.title}": ${first.reason}`, est.blocked);
   }
-  if (est.totalUsd > opts.expectedTotalUsd + 0.01) {
-    throw conflict(`The cost is now $${est.totalUsd.toFixed(2)}, more than the $${opts.expectedTotalUsd.toFixed(2)} you approved. Review the estimate and approve again.`);
+  // Only float rounding is tolerated: a cent would swamp image costs, which are fractions of a cent.
+  if (est.totalUsd > opts.expectedTotalUsd + 1e-6) {
+    throw conflict(`The cost is now $${est.totalUsd.toFixed(4)}, more than the $${opts.expectedTotalUsd.toFixed(4)} you approved. Review the estimate and approve again.`);
   }
   if (project.budget_usd > 0) {
     const spend = await projectSpend(orgId, project.id, all);

@@ -307,3 +307,125 @@ export interface SearchResults {
   workflows: { id: string; name: string; status: string }[];
   media: { id: string; title: string; type: string; thumbUrl: string }[];
 }
+
+// ---- projects (board + director chat) ---------------------------------------------------------------
+export type ProjectTypeId = 'micro_drama' | 'ad_campaign';
+export type ItemStatus = 'draft' | 'ready' | 'generating' | 'review' | 'approved' | 'rejected';
+
+export interface BriefField {
+  key: string;
+  label: string;
+  placeholder: string;
+  rows: number;
+}
+export interface ProjectTypeDef {
+  id: ProjectTypeId;
+  label: string;
+  description: string;
+  itemKind: 'shot' | 'ad_unit';
+  itemLabel: string;
+  groupLabel: string;
+  defaultAspect: string;
+  briefFields: BriefField[];
+  starters: string[];
+}
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  type: ProjectTypeId;
+  brief: Record<string, string>;
+  budgetUsd: number;
+  aspect: string;
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+  itemCount?: number;
+  approvedCount?: number;
+  spentUsd?: number;
+}
+export type ItemEstimate =
+  | { itemId: string; ok: true; costUsd: number | null; outputs: number; seconds: number; unitUsd: number | null; basis: 'admin' | 'list' | null; precision: 'exact' | 'from' | null; model: string; mode: string; promoEnds: string | null }
+  | { itemId: string; ok: false; reason: string };
+export interface Take {
+  id: string;
+  itemId: string;
+  type: 'photo' | 'video';
+  url: string;
+  thumbUrl: string;
+  title: string;
+  createdAt: string;
+}
+export interface BoardItem {
+  id: string;
+  projectId: string;
+  kind: 'shot' | 'ad_unit';
+  group: string;
+  position: number;
+  title: string;
+  prompt: string;
+  notes: string;
+  modelId: string;
+  mode: string;
+  settings: Record<string, any>;
+  media: Partial<Record<MediaRole, string[]>>;
+  meta: Record<string, any>;
+  status: ItemStatus;
+  lastError: string | null;
+  approvedAssetId: string | null;
+  estimate: ItemEstimate;
+  takes: Take[];
+  takeCount: number;
+}
+export interface ProjectAsset {
+  id: string;
+  kind: 'character' | 'product' | 'logo' | 'location' | 'style' | 'reference';
+  name: string;
+  url: string;
+  notes: string;
+  characterId: string;
+}
+export interface ProjectSpend {
+  generationUsd: number;
+  chatUsd: number;
+  inFlightUsd: number;
+  totalUsd: number;
+}
+export interface ProjectSnapshot {
+  project: Project;
+  type: ProjectTypeDef;
+  items: BoardItem[];
+  assets: ProjectAsset[];
+  workflows: { id: string; name: string; status: string; updatedAt: string }[];
+  spend: ProjectSpend;
+  totalEstimateUsd: number;
+}
+export interface EstimateResult {
+  estimates: ItemEstimate[];
+  totalUsd: number;
+  unpriced: string[];
+  blocked: { itemId: string; reason: string }[];
+  budgetUsd: number;
+  spend: ProjectSpend;
+  budgetLeftUsd: number | null;
+}
+export interface ChatBlock {
+  type: 'text' | 'tool';
+  text?: string;
+  name?: string;
+  summary?: string;
+  error?: boolean;
+}
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  blocks: ChatBlock[];
+  costUsd: number;
+  createdAt: string;
+}
+export interface ChatChanged {
+  board: boolean;
+  brief: boolean;
+  workflows: boolean;
+  assets: boolean;
+}

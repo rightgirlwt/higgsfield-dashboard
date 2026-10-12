@@ -454,3 +454,146 @@ describe('history sent back to Claude', () => {
     expect(ok).toHaveLength(4);
   });
 });
+
+describe('workflows in a project (cards, for-each, cost gate)', () => {
+  let proj: any;
+  let wfCards: any;
+  const cardsDef = {
+    nodes: [
+      { id: 't', type: 'trigger', data: { source: 'project', statuses: ['draft'] } },
+      { id: 'f', type: 'foreach', data: { mode: 'cards', maxItems: 10, concurrency: 2 } },
+      { id: 'o', type: 'output', data: {} },
+    ],
+    edges: [{ id: '1', source: 't', target: 'f' }, { id: '2', source: 'f', target: 'o' }],
+  };
+
+  it('a workflow can only belong to a project in the same organisation', async () => {
+    proj = (await call('POST', '/projects', { as: 'user', body: { name: 'Workflow Lab', type: 'micro_drama' } })).json;
+    const bad = await call('POST', '/workflows', { as: 'user', body: { name: 'x', projectId: '0'.repeat(8) + '-0000-4000-8000-000000000000' } });
+    expect(bad.status).toBe(404);
+    wfCards = (await call('POST', '/workflows', { as: 'user', body: { name: 'Render cards', projectId: proj.id, definition: cardsDef } })).json;
+    expect(wfCards.projectId).toBe(proj.id);
+    const links = (await call('GET', `/projects/${proj.id}`, { as: 'user' })).json.workflows;
+    expect(links.map((w: any) => w.id)).toContain(wfCards.id);
+  });
+
+  it('refuses to run until every card can be generated, then prices the cards the trigger would pick up', async () => {
+    await call('POST', `/projects/${proj.id}/items`, {
+      as: 'user',
+      body: { items: [
+        { title: 'A', prompt: 'a lamp', modelId: 'kling-3-std', settings: { duration: 5 } },
+        { title: 'B', prompt: 'a door', modelId: 'kling-3-std', settings: { duration: 3 } },
+        { title: 'C (no model yet)' },
+      ] },
+    });
+    const blocked = await call('POST', `/workflows/${wfCards.id}/run`, { as: 'user', body: { expectedTotalUsd: 99 } });
+    expect(blocked.status).toBe(400);
+    expect(blocked.json.error.message).toMatch(/can't be generated yet/);
+    const c = (await call('GET', `/projects/${proj.id}`, { as: 'user' })).json.items.find((i: any) => i.title.startsWith('C'));
+    await call('PUT', `/projects/${proj.id}/items/${c.id}`, { as: 'user', body: { prompt: 'a window', modelId: 'kling-3-std', settings: { duration: 4 } } });
+    const est = (await call('POST', `/workflows/${wfCards.id}/estimate`, { as: 'user' })).json;
+    expect(est.problems).toEqual([]);
+    expect(est.steps[0]).toMatchObject({ items: 3 });
+    expect(est.totalUsd).toBeCloseTo((await call('POST', `/projects/${proj.id}/estimate`, { as: 'user', body: {} })).json.totalUsd, 8);
+  });
+
+  it('the project budget stops a workflow run (402) before anything is queued', async () => {
+    const est = (await call('POST', `/workflows/${wfCards.id}/estimate`, { as: 'user' })).json;
+    await call('PUT', `/projects/${proj.id}`, { as: 'user', body: { budgetUsd: 0.01 } });
+    const r = await call('POST', `/workflows/${wfCards.id}/run`, { as: 'user', body: { expectedTotalUsd: est.totalUsd } });
+    expect(r.status).toBe(402);
+    expect(r.json.error.code).toBe('over_budget');
+    await call('PUT', `/projects/${proj.id}`, { as: 'user', body: { budgetUsd: 0 } });
+  });
+
+  it('renders every card with its own settings, moves them to review and files the takes under each card', async () => {
+    const est = (await call('POST', `/workflows/${wfCards.id}/estimate`, { as: 'user' })).json;
+    const r = await call('POST', `/workflows/${wfCards.id}/run`, { as: 'user', body: { expectedTotalUsd: est.totalUsd } });
+    expect(r.status).toBe(202);
+    const done = await waitRun(r.json.run.id);
+    expect(done.run.status).toBe('completed');
+    expect(done.run.costUsd).toBeCloseTo(est.totalUsd, 8);
+    const items = (await call('GET', `/projects/${proj.id}`, { as: 'user' })).json.items;
+    expect(items.map((i: any) => i.status)).toEqual(['review', 'review', 'review']);
+    expect(items.every((i: any) => i.takeCount === 1)).toBe(true);
+    // the trigger only selects drafts, so a second run finds nothing to do
+    const again = await call('POST', `/workflows/${wfCards.id}/estimate`, { as: 'user' });
+    expect(again.json.steps[0].items).toBe(0);
+  });
+
+  it('prompt mode: one generation per list item from a template; the cost estimate is a ceiling (maxItems) when the list is unknown', async () => {
+    const def = {
+      nodes: [
+        { id: 't', type: 'trigger', data: { source: 'manual', sampleInput: 'a fox\na heron\na moth' } },
+        { id: 'f', type: 'foreach', data: { mode: 'prompt', model: 'z-image-turbo', prompt: 'Photo of {{item}}, style: {{project.brief.visualStyle}}', maxItems: 5 } },
+        { id: 'o', type: 'output', data: {} },
+      ],
+      edges: [{ id: '1', source: 't', target: 'f' }, { id: '2', source: 'f', target: 'o' }],
+    };
+    await call('PUT', `/projects/${proj.id}`, { as: 'user', body: { brief: { visualStyle: 'warm film grain' } } });
+    const wf = (await call('POST', '/workflows', { as: 'user', body: { name: 'Prompt each', projectId: proj.id, definition: def } })).json;
+    const est = (await call('POST', `/workflows/${wf.id}/estimate`, { as: 'user' })).json;
+    expect(est.upTo).toBe(true);
+    expect(est.steps[0]).toMatchObject({ items: 5, note: 'up to 5 items' });
+    const done = await waitRun((await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'a fox\na heron\na moth' }, expectedTotalUsd: est.totalUsd } })).json.run.id);
+    expect(done.run.status).toBe('completed');
+    expect(done.run.output.result.assets).toHaveLength(3); // only the 3 items given were generated
+    expect(done.run.costUsd).toBeCloseTo((est.totalUsd / 5) * 3, 8);
+    expect(done.logs.map((l: any) => l.message).join('\n')).toMatch(/For each of 3 items/);
+  });
+
+  it('{{project.*}} variables resolve in a project workflow, and free workflows need no confirmation', async () => {
+    const def = {
+      nodes: [
+        { id: 't', type: 'trigger', data: { source: 'manual' } },
+        { id: 'x', type: 'transform', data: { mode: 'template', template: '{{project.name}} | {{project.aspect}} | {{project.brief.visualStyle}}' } },
+        { id: 'o', type: 'output', data: {} },
+      ],
+      edges: [{ id: '1', source: 't', target: 'x' }, { id: '2', source: 'x', target: 'o' }],
+    };
+    const wf = (await call('POST', '/workflows', { as: 'user', body: { name: 'Vars', projectId: proj.id, definition: def } })).json;
+    const done = await waitRun((await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: {} })).json.run.id);
+    expect(done.run.output.result).toBe('Workflow Lab | 9:16 | warm film grain');
+  });
+
+  it('validates for-each and the project trigger', async () => {
+    const v = (data: any, src = 'manual') => call('POST', '/workflows/validate', { as: 'user', body: { definition: { nodes: [{ id: 't', type: 'trigger', data: { source: src } }, { id: 'f', type: 'foreach', data }], edges: [{ id: 'e', source: 't', target: 'f' }] } } });
+    expect((await v({ mode: 'prompt' })).json.issues.map((i: any) => i.message)).toEqual(expect.arrayContaining(['For-each needs a prompt template', 'For-each needs a valid Studio model']));
+    expect((await v({ mode: 'sideways' })).json.issues.map((i: any) => i.message)).toContain('For-each mode must be "cards" or "prompt"');
+    expect((await v({ mode: 'cards', maxItems: 500 })).json.issues.map((i: any) => i.message)).toContain('Max items must be between 1 and 50');
+    expect((await v({ mode: 'cards' })).json.issues.filter((i: any) => i.level === 'error')).toEqual([]);
+  });
+
+  it('a project-cards workflow outside a project cannot be run', async () => {
+    const wf = (await call('POST', '/workflows', { as: 'user', body: { name: 'Orphan', definition: cardsDef } })).json;
+    const r = await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { expectedTotalUsd: 5 } });
+    expect(r.status).toBe(400);
+    expect(r.json.error.message).toMatch(/belongs to a project/);
+  });
+
+  it('every shipped template is a valid workflow, and project templates install into a project', async () => {
+    const { WORKFLOW_TEMPLATES } = await import('../src/services/templates');
+    const { validateWorkflow } = await import('../src/services/workflowEngine');
+    for (const t of WORKFLOW_TEMPLATES) expect(validateWorkflow(t.definition).filter((i) => i.level === 'error'), t.id).toEqual([]);
+    const r = await call('POST', '/workflows/from-template', { as: 'user', body: { templateId: 'polish-then-render', projectId: proj.id } });
+    expect(r.status).toBe(201);
+    expect(r.json.projectId).toBe(proj.id);
+  });
+
+  it('the scheduler skips workflows that would spend money (and says so), but still runs free ones', async () => {
+    const { tick } = await import('../src/services/scheduler');
+    const sched = (extra: any[]) => ({ nodes: [{ id: 't', type: 'trigger', data: { source: 'schedule', intervalMinutes: 5 } }, ...extra], edges: extra.length ? [{ id: 'e', source: 't', target: extra[0].id }] : [] });
+    const spender = (await call('POST', '/workflows', { as: 'user', body: { name: 'Nightly renders', definition: sched([{ id: 'g', type: 'generate', data: { model: 'z-image-turbo', prompt: 'a lamp' } }]) } })).json;
+    const free = (await call('POST', '/workflows', { as: 'user', body: { name: 'Nightly note', definition: sched([{ id: 'a', type: 'action', data: { action: 'log', message: 'hi' } }]) } })).json;
+    for (const w of [spender, free]) expect((await call('PUT', `/workflows/${w.id}`, { as: 'user', body: { status: 'active' } })).status).toBe(200);
+    const before = (await db.query(`SELECT COUNT(*)::int AS n FROM job_runs WHERE ref_id=$1`, [spender.id])).rows[0].n;
+    const started = await tick(Date.now() + 3600_000);
+    expect(started).toBe(1);
+    expect((await db.query(`SELECT COUNT(*)::int AS n FROM job_runs WHERE ref_id=$1`, [spender.id])).rows[0].n).toBe(before);
+    const alert = (await db.query(`SELECT message FROM alerts WHERE kind='schedule_skipped'`)).rows[0];
+    expect(alert.message).toMatch(/Nightly renders.*skipped.*generates media/);
+    await tick(Date.now() + 3600_000); // a second pass the same day doesn't pile up duplicate alerts
+    expect((await db.query(`SELECT COUNT(*)::int AS n FROM alerts WHERE kind='schedule_skipped'`)).rows[0].n).toBe(1);
+    for (const w of [spender, free]) await call('PUT', `/workflows/${w.id}`, { as: 'user', body: { status: 'paused' } });
+  });
+});
