@@ -138,28 +138,59 @@ export interface PromptDetail {
 export type NodeType = 'trigger' | 'llm' | 'generate' | 'transform' | 'action' | 'output';
 
 export type MediaRole = 'start' | 'end' | 'reference' | 'video' | 'audio';
-export type SettingSpec =
-  | { type: 'enum'; label: string; values: string[]; default: string }
-  | { type: 'range'; label: string; min: number; max: number; step?: number; default: number }
-  | { type: 'boolean'; label: string; default: boolean };
+
+export type ParamSpec =
+  | { type: 'enum'; label: string; values: string[]; default: string; numeric?: boolean; advanced?: boolean }
+  | { type: 'int'; label: string; min: number; max: number; default: number; advanced?: boolean }
+  | { type: 'number'; label: string; min: number; max: number; step: number; default: number; advanced?: boolean }
+  | { type: 'boolean'; label: string; default: boolean; as?: 'bool' | 'onoff' | 'yesno'; advanced?: boolean }
+  | { type: 'text'; label: string; maxLength: number; advanced?: boolean }
+  | { type: 'seed'; label: string; min: number; max: number; advanced?: boolean }
+  | { type: 'character'; label: string; advanced?: boolean };
+
+export interface MediaInput {
+  param: string;
+  role: MediaRole;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  max: number;
+  array: boolean;
+}
+
+export interface StudioMode {
+  id: string;
+  label: string;
+  path: string;
+  promptRequired?: boolean;
+  params: Record<string, ParamSpec>;
+  media: MediaInput[];
+}
 
 export interface StudioModel {
   id: string;
   label: string;
   surface: 'image' | 'video';
+  family: string;
   description: string;
-  roles: Partial<Record<MediaRole, number>>;
-  settings: Record<string, SettingSpec>;
-  verified: boolean;
+  priceUnit: 'output' | 'second';
+  modes: StudioMode[];
   note?: string;
-  nativeBatch: boolean;
   priceUsd: number | null;
 }
 
 export interface StudioCatalog {
   connected: boolean;
   baseUrlSet: boolean;
+  soulIdPriceUsd: number;
   models: StudioModel[];
+}
+
+export interface Character {
+  id: string;
+  name: string;
+  status: string;
+  thumbnailUrl: string | null;
 }
 
 export interface WfNodeData {

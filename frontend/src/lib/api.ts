@@ -66,6 +66,21 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => json<T>('PATCH', path, body ?? {}),
   del: <T = void>(path: string) => json<T>('DELETE', path),
 
+  /** Upload a raw file body (the server hosts it on Higgsfield and returns a public URL). */
+  async upload<T>(path: string, file: File): Promise<T> {
+    const token = await tokenProvider();
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}/api${path}`, { method: 'POST', headers: { 'Content-Type': file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: file });
+    } catch {
+      throw new ApiError(0, 'Cannot reach the server. Check that the backend is running.', 'network');
+    }
+    if (res.status === 401) onUnauthorized();
+    const j = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, j?.error?.message ?? `Upload failed (${res.status})`, j?.error?.code ?? 'error');
+    return j as T;
+  },
+
   /** Authenticated download (a plain <a href> can't send the bearer token). */
   async download(path: string, filename: string): Promise<void> {
     const res = await request('GET', path);

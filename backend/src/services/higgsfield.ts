@@ -65,12 +65,18 @@ export async function getHfConfig(orgId: string): Promise<HfConfig | null> {
 }
 
 async function call(cfg: HfConfig, method: 'GET' | 'POST', path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<any> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
-    method,
-    headers: { Authorization: `Key ${cfg.key}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), Accept: 'application/json', ...extraHeaders },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.baseUrl}${path}`, {
+      method,
+      headers: { Authorization: `Key ${cfg.key}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), Accept: 'application/json', ...extraHeaders },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    // Network failure / timeout: never leak internals (or the key), just say what happened.
+    throw new HiggsfieldError(502, (err as Error)?.name === 'TimeoutError' ? 'Higgsfield did not respond in time' : 'Could not reach the Higgsfield API. Check the API address in Settings → Higgsfield.');
+  }
   const text = await res.text();
   let payload: any = null;
   try {
@@ -108,6 +114,82 @@ export async function getStatus(cfg: HfConfig, requestId: string): Promise<HfSta
     video: typeof r?.video?.url === 'string' ? r.video.url : null,
     error: r?.error === undefined || r?.error === null ? null : typeof r.error === 'string' ? r.error : JSON.stringify(r.error).slice(0, 300),
   };
+}
+
+// ---- uploads ----------------------------------------------------------------------------------
+export const UPLOAD_TYPES: Record<string, { kind: 'image' | 'video' | 'audio'; maxBytes: number }> = {
+  'image/jpeg': { kind: 'image', maxBytes: 20 * 1024 * 1024 },
+  'image/jpg': { kind: 'image', maxBytes: 20 * 1024 * 1024 },
+  'image/png': { kind: 'image', maxBytes: 20 * 1024 * 1024 },
+  'image/webp': { kind: 'image', maxBytes: 20 * 1024 * 1024 },
+  'image/gif': { kind: 'image', maxBytes: 20 * 1024 * 1024 },
+  'video/mp4': { kind: 'video', maxBytes: 100 * 1024 * 1024 },
+  'audio/wav': { kind: 'audio', maxBytes: 30 * 1024 * 1024 },
+  'audio/x-wav': { kind: 'audio', maxBytes: 30 * 1024 * 1024 },
+};
+
+/**
+ * Hosts a local file on Higgsfield storage so it can be used as a generation input:
+ *   POST /files/generate-upload-url {content_type} -> {public_url, upload_url, upload_headers}
+ *   PUT  upload_url (only upload_headers, never our credentials)
+ * Files are tagged retention=temporary by the platform, so don't treat them as permanent storage.
+ */
+export async function uploadFile(cfg: HfConfig, data: Buffer, contentType: string): Promise<string> {
+  const r = await call(cfg, 'POST', '/files/generate-upload-url', { content_type: contentType });
+  const uploadUrl: unknown = r?.upload_url;
+  const publicUrl: unknown = r?.public_url;
+  if (typeof uploadUrl !== 'string' || typeof publicUrl !== 'string' || !/^https:\/\//i.test(uploadUrl) || !/^https?:\/\//i.test(publicUrl)) {
+    throw new HiggsfieldError(502, 'Higgsfield returned an unexpected upload response');
+  }
+  const headers: Record<string, string> = { 'Content-Type': contentType };
+  if (r.upload_headers && typeof r.upload_headers === 'object') for (const [k, v] of Object.entries(r.upload_headers)) if (typeof v === 'string') headers[k] = v;
+  let put: Response;
+  try {
+    put = await fetch(uploadUrl, { method: 'PUT', headers, body: new Uint8Array(data), signal: AbortSignal.timeout(180_000) });
+  } catch {
+    throw new HiggsfieldError(502, 'Could not reach Higgsfield storage to upload the file. Try again.');
+  }
+  if (!put.ok) throw new HiggsfieldError(502, `Upload to Higgsfield storage failed (${put.status})`);
+  return publicUrl;
+}
+
+// ---- characters (Soul ID) ---------------------------------------------------------------------
+export interface Character {
+  id: string;
+  name: string;
+  status: string;
+  thumbnailUrl: string | null;
+}
+
+const asCharacter = (x: any): Character | null => {
+  const id = x?.id ?? x?.reference_id;
+  if (typeof id !== 'string') return null;
+  const thumb = x.thumbnail_url ?? x.preview_url ?? x.image_url ?? x.images?.[0]?.url ?? x.input_images?.[0]?.image_url ?? null;
+  return { id, name: typeof x.name === 'string' && x.name ? x.name : 'Untitled character', status: typeof x.status === 'string' ? x.status : 'unknown', thumbnailUrl: typeof thumb === 'string' ? thumb : null };
+};
+
+export async function listCharacters(cfg: HfConfig): Promise<Character[]> {
+  const r = await call(cfg, 'GET', '/v1/custom-references/list?page=1&page_size=50');
+  const rows: unknown[] = Array.isArray(r) ? r : (r?.items ?? r?.data ?? r?.results ?? r?.references ?? r?.custom_references ?? []);
+  return rows.map(asCharacter).filter((c): c is Character => c !== null);
+}
+
+export async function getCharacter(cfg: HfConfig, id: string): Promise<Character> {
+  const c = asCharacter(await call(cfg, 'GET', `/v1/custom-references/${encodeURIComponent(id)}`));
+  if (!c) throw new HiggsfieldError(502, 'Unexpected character response from Higgsfield');
+  return c;
+}
+
+/** Starts Soul ID training for Soul 2 (billed by Higgsfield per request - see their pricing). */
+export async function createCharacter(cfg: HfConfig, name: string, imageUrls: string[]): Promise<Character> {
+  const r = await call(cfg, 'POST', '/v1/custom-references', {
+    name,
+    model_version: 'v2',
+    input_images: imageUrls.map((u) => ({ type: 'image_url', image_url: u })),
+  });
+  const c = asCharacter(r);
+  if (!c) throw new HiggsfieldError(502, 'Higgsfield did not return a character id');
+  return c;
 }
 
 // ---- simulated mode ---------------------------------------------------------------------------

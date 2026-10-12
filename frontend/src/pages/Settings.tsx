@@ -208,13 +208,13 @@ function HiggsfieldTab({ s, onSaved }: { s: SettingsData; onSaved: () => void })
       </Card>
 
       <Card className="p-5">
-        <CardHeader eyebrow="Spend tracking" title="Price per generated output (USD)" />
-        <p className="mb-4 text-sm text-slate-400">The Higgsfield API doesn’t report cost, so enter what one image or one video costs you (from your plan or pricing page). Leave blank if unknown — those generations are recorded as $0.</p>
+        <CardHeader eyebrow="Spend tracking" title="Prices (USD)" />
+        <p className="mb-4 text-sm text-slate-400">The Higgsfield API doesn’t report cost, so enter what each model costs you: <strong>per image</strong> for image models and <strong>per second of video</strong> for video models (see open.higgsfield.ai/explore for current prices; they vary by resolution and promotions). Leave blank if unknown — those generations are recorded as $0.</p>
         {!catalog.data ? <Skeleton className="h-40" /> : (
           <ul className="space-y-2">
             {catalog.data.models.map((m) => (
               <li key={m.id} className="flex items-center justify-between gap-3">
-                <label htmlFor={`price-${m.id}`} className="text-sm">{m.label} <span className="text-xs text-slate-500">({m.surface})</span></label>
+                <label htmlFor={`price-${m.id}`} className="text-sm">{m.label} <span className="text-xs text-slate-500">({m.priceUnit === 'second' ? 'per second' : 'per image'})</span></label>
                 <div className="flex items-center gap-1">
                   <span className="text-slate-500">$</span>
                   <Input id={`price-${m.id}`} className="w-24" type="number" min={0} step="0.01" placeholder="—" value={prices[m.id] ?? ''} onChange={(e) => setPrices((p) => ({ ...p, [m.id]: e.target.value }))} />

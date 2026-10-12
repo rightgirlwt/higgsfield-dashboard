@@ -123,9 +123,13 @@ Connect with `io(origin, { auth: { token } })` (same token as REST). Server → 
 
 | Method & path | Role | Notes |
 |---|---|---|
-| `GET /studio/models` | any | `{connected, baseUrlSet, models:[{id,label,surface,description,roles,settings,verified,note,nativeBatch,priceUsd}]}`. `connected=false` means simulated mode |
-| `POST /studio/generate` | user | `{modelId, prompt(1-5000), settings?, media?:{start,end,reference,video,audio: url[]}, count?(1-4)}` → `202 {run}` (run `kind:"generation"`). Settings and media are validated against the model (unknown keys, ranges, per-role limits, http(s)-only URLs) → `400` otherwise. Progress via sockets; results are saved to the media timeline (`GET /media?source=studio&runId=`) |
-| `PUT /settings/higgsfield` | admin | `{baseUrl}` (http(s) only, https required in production, no credentials in URL; empty clears) |
-| `PUT /settings/studio-prices` | admin | `{prices:{modelId: usdPerOutput\|null}}` |
+| `GET /studio/models` | any | `{connected, baseUrlSet, soulIdPriceUsd, models:[{id,label,surface,family,description,priceUnit,priceUsd,note,modes:[{id,label,path,promptRequired,params,media}]}]}`. The catalog is pure data: `params` describe each setting (`enum`/`int`/`number`/`boolean`/`text`/`seed`/`character`), `media` lists the inputs (images, video, audio) with their role, limit and whether they are required. `connected=false` = simulated mode |
+| `POST /studio/generate` | user | `{modelId, mode?, prompt, settings?, media?:{start,end,reference,video,audio: url[]}, count?(1-4)}` → `202 {run}` (run `kind:"generation"`). `mode` is inferred from the media when omitted (a start frame selects image-to-video). Everything is validated against the chosen mode (unknown settings, ranges, required inputs, per-role file limits, http(s)-only URLs) → `400`. Results are saved to the media timeline (`GET /media?source=studio&runId=`) |
+| `POST /studio/uploads?filename=` | user | Raw file body with `Content-Type` of `image/jpeg\|png\|webp\|gif`, `video/mp4` or `audio/wav` (limits: images 20 MB, audio 30 MB, video 100 MB). Hosts the file on Higgsfield storage and returns `{url, kind, name, bytes, mediaId}`; images/videos are also added to the media library (`source=upload`). Requires a Higgsfield connection. Higgsfield marks uploads temporary |
+| `GET /studio/characters` | any | `{connected, characters:[{id,name,status,thumbnailUrl}]}` (Soul IDs on the connected account) |
+| `POST /studio/characters` | user | `{name, imageUrls[1-30], confirmedCost:true}` trains a Soul ID (billed by Higgsfield, about $2.50; recorded as usage). Refused without `confirmedCost` |
+| `GET /studio/characters/:id` | any | Status of one character |
+| `PUT /settings/higgsfield` | admin | `{baseUrl}`; for higgsfield.ai hosts any pasted path is trimmed to the host; https required in production; no credentials in the URL |
+| `PUT /settings/studio-prices` | admin | `{prices:{modelId: usd\|null}}`, USD per generated image (image models) or per second of video (video models) |
 
-`GET /settings` also returns `higgsfield:{baseUrl, baseUrlFromEnv, prices}`. Runs of `kind=generation` appear in `GET /runs`, Monitoring and the job table. Workflow definitions may now contain `generate` nodes (`data: {model, prompt, startUrl?, endUrl?, count?}`).
+`GET /settings` also returns `higgsfield:{baseUrl, baseUrlFromEnv, prices}`; `GET /settings/secrets` includes a safe shape check for the Higgsfield key (lengths and the first 8 characters of the public key ID, never the secret). Runs of `kind=generation` appear in `GET /runs`, Monitoring and the job table. Workflow definitions may contain `generate` nodes (`data: {model, prompt, startUrl?, endUrl?, count?}`); a start/end URL switches the node to the model's image mode.

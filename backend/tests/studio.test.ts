@@ -6,46 +6,101 @@ import { setDb } from '../src/ctx';
 import { createDb, type Db } from '../src/db';
 import { migrate } from '../src/db/migrations';
 import { seedDemo } from '../src/db/seed';
-import { getStudioModel, resolveMedia, resolveSettings, STUDIO_MODELS } from '../src/services/studioCatalog';
+import { prepareGeneration } from '../src/services/studio';
+import { buildRequest, getStudioModel, pickMode, resolveMedia, resolveSettings, STUDIO_MODELS, type MediaRole } from '../src/services/studioCatalog';
 
-describe('studio catalog', () => {
-  const plane = (id: string, settings: Record<string, any> = {}, media: any = {}) => {
-    const m = getStudioModel(id)!;
-    return m.build({ prompt: 'a fox', settings: resolveSettings(m, settings), media: resolveMedia(m, media) });
-  };
+/** Validate + build exactly what would be sent to the platform. */
+const plan = (modelId: string, p: { mode?: string; prompt?: string; settings?: Record<string, any>; media?: Partial<Record<MediaRole, string[]>> } = {}) =>
+  prepareGeneration({ modelId, prompt: 'a fox', ...p });
 
-  it('switches Kling between text and image endpoints and maps flags like the platform expects', () => {
-    const text = plane('kling-3-pro');
+describe('studio catalog (data-driven)', () => {
+  it('has unique model ids, valid defaults, and unique mode ids/paths', () => {
+    expect(new Set(STUDIO_MODELS.map((m) => m.id)).size).toBe(STUDIO_MODELS.length);
+    for (const m of STUDIO_MODELS) {
+      expect(new Set(m.modes.map((x) => x.id)).size).toBe(m.modes.length);
+      for (const mode of m.modes) {
+        expect(mode.path).toMatch(/^[a-z0-9][a-z0-9._/-]*$/i);
+        expect(() => resolveSettings(mode, {})).not.toThrow();
+      }
+    }
+    // Only models that exist in Higgsfield's live catalog (Flux 2 / Soul Cinema were removed)
+    expect(getStudioModel('flux-2')).toBeUndefined();
+    expect(getStudioModel('soul-cinema')).toBeUndefined();
+  });
+
+  it('Soul 2: numeric batch size, character reference, and image mode needs a reference image', () => {
+    const t = plan('soul-2', { settings: { batch_size: '4', aspect_ratio: '3:2' } });
+    expect(t.path).toBe('higgsfield-ai/soul/v2/standard');
+    expect(t.body).toEqual({ prompt: 'a fox', batch_size: 4, resolution: '720p', aspect_ratio: '3:2', enhance_prompt: true });
+    expect(t.requests).toBe(1); // native batch: one request, four images
+
+    const char = '8b1d9cae-1111-4222-8333-444455556666';
+    const c = plan('soul-2', { settings: { custom_reference_id: char, custom_reference_strength: 0.7 } });
+    expect(c.body).toMatchObject({ custom_reference_id: char, custom_reference_strength: 0.7 });
+    // strength is dropped when no character is chosen
+    expect(plan('soul-2', { settings: { custom_reference_strength: 0.7 } }).body).not.toHaveProperty('custom_reference_strength');
+
+    const img = plan('soul-2', { media: { start: ['https://x.test/ref.png'] } });
+    expect(img.path).toBe('higgsfield-ai/soul/v2/image-to-image');
+    expect(img.body).toMatchObject({ image_url: 'https://x.test/ref.png' });
+    expect(() => plan('soul-2', { mode: 'image' })).toThrow(/Reference image is required/);
+    expect(() => plan('soul-2', { settings: { custom_reference_id: 'not-a-uuid' } })).toThrow(/invalid character id/);
+  });
+
+  it('Kling picks text vs image mode from the media, maps on/off flags, and sends first/last frames', () => {
+    const text = plan('kling-3-pro');
     expect(text.path).toBe('kling-video/v3.0/pro/text-to-video');
-    expect(text.body).toMatchObject({ prompt: 'a fox', sound: 'on', duration: 5, cfg_scale: 0.5, multi_shots: false, aspect_ratio: '16:9' });
-    const img = plane('kling-3-4k', { sound: false }, { start: ['https://x.test/a.png'], end: ['https://x.test/b.png'] });
+    expect(text.body).toMatchObject({ sound: 'on', duration: 5, cfg_scale: 0.5, multi_shots: false, aspect_ratio: '16:9' });
+    const img = plan('kling-3-4k', { settings: { sound: false }, media: { start: ['https://x.test/a.png'], end: ['https://x.test/b.png'] } });
     expect(img.path).toBe('kling-video/v3.0/4k/image-to-video');
     expect(img.body).toMatchObject({ sound: 'off', image_url: 'https://x.test/a.png', last_image_url: 'https://x.test/b.png' });
     expect(img.body).not.toHaveProperty('aspect_ratio');
-    expect(plane('kling-3-turbo', {}, { start: ['https://x.test/a.png'] }).path).toBe('kling-video/v3.0-turbo/image-to-video');
+    expect(plan('kling-3-turbo', { media: { start: ['https://x.test/a.png'] } }).path).toBe('kling-video/v3.0-turbo/image-to-video');
+    expect(plan('kling-3-std', { prompt: '', media: { start: ['https://x.test/a.png'] } }).mode.promptRequired).toBe(false); // image-to-video may omit the prompt
   });
 
-  it('sends Soul batch size as a number and fills defaults', () => {
-    const s = plane('soul-2', { batchSize: '4' });
-    expect(s.path).toBe('higgsfield-ai/soul/v2/standard');
-    expect(s.body).toMatchObject({ batch_size: 4, resolution: '720p', aspect_ratio: '1:1', enhance_prompt: false });
-    expect(plane('soul-cinema').path).toBe('higgsfield-ai/soul/cinema');
-    expect(plane('flux-2').path).toBe('flux-2-pro');
+  it('Kling motion control sends character image + motion video with yes/no flags', () => {
+    const r = plan('kling-3-motion-pro', { prompt: '', settings: { keep_original_sound: false }, media: { start: ['https://x.test/c.png'], video: ['https://x.test/m.mp4'] } });
+    expect(r.path).toBe('kling-video/v3/motion-control/pro');
+    expect(r.body).toEqual({ image_url: 'https://x.test/c.png', video_url: 'https://x.test/m.mp4', keep_original_sound: 'no', character_orientation: 'video' });
+    expect(() => plan('kling-3-motion-std', { prompt: '', media: { start: ['https://x.test/c.png'] } })).toThrow(/Motion video is required/);
   });
 
-  it('rejects unknown/out-of-range settings and unsupported or non-http media', () => {
-    const kling = getStudioModel('kling-3-std')!;
-    expect(() => resolveSettings(kling, { duration: 99 })).toThrow(/between 3 and 15/);
-    expect(() => resolveSettings(kling, { nope: 1 })).toThrow(/Unknown setting/);
-    expect(() => resolveSettings(kling, { sound: 'yes' })).toThrow(/true or false/);
-    expect(() => resolveMedia(getStudioModel('soul-2')!, { start: ['https://x.test/a.png'] })).toThrow(/does not accept start/);
-    expect(() => resolveMedia(kling, { start: ['https://a/1.png', 'https://a/2.png'] })).toThrow(/at most 1/);
-    expect(() => resolveMedia(kling, { start: ['javascript:alert(1)'] })).toThrow(/http\(s\)/);
+  it('Seedance reference mode sends lists of images, videos and audio; text mode sends aspect ratio', () => {
+    const ref = plan('seedance-2-5', { media: { reference: ['https://a/1.png', 'https://a/2.png'], video: ['https://a/v.mp4'], audio: ['https://a/a.wav'] } });
+    expect(ref.path).toBe('bytedance/seedance-2.5/reference-to-video');
+    expect(ref.body).toMatchObject({ image_urls: ['https://a/1.png', 'https://a/2.png'], video_urls: ['https://a/v.mp4'], audio_urls: ['https://a/a.wav'], generate_audio: true, output_format: 'mp4' });
+    expect(plan('seedance-2-0').body).toMatchObject({ aspect_ratio: '16:9', resolution: '720p' });
+    expect(plan('seedance-2-0').body).not.toHaveProperty('output_format'); // 2.0 has no format option
+    expect(plan('seedance-2-0', { media: { start: ['https://a/s.png'], end: ['https://a/e.png'] } }).body).toMatchObject({ image_url: 'https://a/s.png', end_image_url: 'https://a/e.png' });
   });
 
-  it('has unique model ids with valid defaults', () => {
-    expect(new Set(STUDIO_MODELS.map((m) => m.id)).size).toBe(STUDIO_MODELS.length);
-    for (const m of STUDIO_MODELS) expect(() => resolveSettings(m, {})).not.toThrow();
+  it('numeric enums are sent as numbers; empty optional enums/text/seed are omitted', () => {
+    const l = plan('ltx-2-5-fast', { settings: { duration: '8', fps: '48' } });
+    expect(l.body).toMatchObject({ duration: 8, fps: 48 });
+    expect(l.body).not.toHaveProperty('camera_movement');
+    const q = plan('qwen-image-3', { settings: { negative_prompt: 'blurry', seed: 42 } });
+    expect(q.body).toMatchObject({ negative_prompt: 'blurry', seed: 42, prompt_extend: true });
+    expect(plan('qwen-image-3').body).not.toHaveProperty('seed');
+  });
+
+  it('rejects unknown/out-of-range settings, unsupported or non-http media, and too many files', () => {
+    expect(() => plan('kling-3-std', { settings: { duration: 99 } })).toThrow(/between 3 and 15/);
+    expect(() => plan('kling-3-std', { settings: { nope: 1 } })).toThrow(/Unknown setting/);
+    expect(() => plan('kling-3-std', { settings: { sound: 'yes' } })).toThrow(/true or false/);
+    expect(() => plan('z-image-turbo', { media: { start: ['https://x.test/a.png'] } })).toThrow(/does not accept start/);
+    expect(() => plan('kling-3-std', { media: { start: ['https://a/1.png', 'https://a/2.png'] } })).toThrow(/at most 1/);
+    expect(() => plan('kling-3-std', { media: { start: ['javascript:alert(1)'] } })).toThrow(/http\(s\)/);
+    expect(() => plan('kling-3-std', { mode: 'warp' })).toThrow(/no "warp" mode/);
+    expect(() => plan('kling-3-std', { prompt: '  ' })).toThrow(/Write a prompt/);
+  });
+
+  it('pickMode prefers the mode whose inputs match what was provided', () => {
+    const wan = getStudioModel('wan-3')!;
+    expect(pickMode(wan, undefined, {}).id).toBe('text');
+    expect(pickMode(wan, undefined, { start: ['https://x/a.png'] }).id).toBe('image');
+    expect(pickMode(wan, undefined, { reference: ['https://x/a.png'] }).id).toBe('reference');
+    expect(buildRequest(wan.modes[0], { prompt: 'p', settings: resolveSettings(wan.modes[0], {}), media: resolveMedia(wan.modes[0], {}) }).path).toBe('alibaba/wan-3.0/text-to-video');
   });
 });
 
@@ -78,10 +133,10 @@ async function waitRun(id: string, as = 'user') {
 const fake = {
   server: null as http.Server | null,
   url: '',
-  seen: [] as { method: string; url: string; auth: string | undefined; body: any }[],
-  /** How the next submitted requests should end. */
+  seen: [] as { method: string; url: string; auth: string | undefined; idem: string | undefined; body: any }[],
   script: 'video' as 'video' | 'nsfw' | 'reject' | 'image2',
   statusCalls: new Map<string, number>(),
+  uploads: [] as { bytes: number; headers: http.IncomingHttpHeaders }[],
 };
 
 beforeAll(async () => {
@@ -96,13 +151,29 @@ beforeAll(async () => {
   for (const u of users) tokens[u.role] = u.token;
 
   fake.server = http.createServer((req, res) => {
-    let raw = '';
-    req.on('data', (c) => (raw += c));
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      const body = raw ? JSON.parse(raw) : null;
-      fake.seen.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, body });
+      const buf = Buffer.concat(chunks);
+      const isJson = (req.headers['content-type'] ?? '').includes('json');
+      const body = buf.length && isJson ? JSON.parse(buf.toString()) : null;
       const send = (code: number, obj: unknown) => (res.writeHead(code, { 'content-type': 'application/json' }), res.end(JSON.stringify(obj)));
+      if (req.method === 'PUT' && req.url!.startsWith('/storage/')) {
+        fake.uploads.push({ bytes: buf.length, headers: req.headers });
+        res.writeHead(200).end();
+        return;
+      }
+      fake.seen.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, idem: req.headers['idempotency-key'] as string | undefined, body });
       const m = /^\/requests\/([^/]+)\/status$/.exec(req.url!);
+      if (req.url === '/files/generate-upload-url') {
+        return send(200, { public_url: 'https://cdn.test/in/file-1.png', upload_url: 'https://127.0.0.1.invalid/never', content_type: body.content_type, upload_headers: {} });
+      }
+      if (req.url!.startsWith('/v1/custom-references/list')) {
+        return send(200, { items: [{ id: '8b1d9cae-1111-4222-8333-444455556666', name: 'Mia', status: 'completed', thumbnail_url: 'https://cdn.test/mia.jpg' }, { id: 'aaaaaaaa-1111-4222-8333-444455556666', name: 'Draft', status: 'training' }] });
+      }
+      if (req.url === '/v1/custom-references' && req.method === 'POST') {
+        return send(201, { id: 'bbbbbbbb-1111-4222-8333-444455556666', name: body.name, status: 'training', echo: body });
+      }
       if (req.method === 'POST') {
         if (fake.script === 'reject') return send(422, { detail: 'prompt too long' });
         return send(200, { request_id: `req-${fake.seen.length}`, status: 'queued', status_url: '', cancel_url: '' });
@@ -129,61 +200,70 @@ afterAll(async () => {
 });
 
 describe('studio API (simulated mode)', () => {
-  it('lists the catalog and reports it is not connected', async () => {
+  it('serves the data-driven catalog (modes, params, media inputs) and reports it is not connected', async () => {
     const r = await call('GET', '/studio/models', { as: 'viewer' });
     expect(r.status).toBe(200);
     expect(r.json.connected).toBe(false);
     expect(r.json.models.length).toBe(STUDIO_MODELS.length);
     const kling = r.json.models.find((m: any) => m.id === 'kling-3-pro');
-    expect(kling).toMatchObject({ surface: 'video', priceUsd: null, nativeBatch: false });
-    expect(kling).not.toHaveProperty('build');
-    expect(r.json.models.find((m: any) => m.id === 'soul-2').nativeBatch).toBe(true);
+    expect(kling).toMatchObject({ surface: 'video', priceUsd: null, priceUnit: 'second' });
+    expect(kling.modes.map((m: any) => m.id)).toEqual(['text', 'image']);
+    expect(kling.modes[1].media.map((x: any) => x.role)).toEqual(['start', 'end']);
+    expect(r.json.models.find((m: any) => m.id === 'soul-2').modes[0].params.custom_reference_id.type).toBe('character');
   });
 
   it('validates input and enforces roles', async () => {
     const ok = { modelId: 'kling-3-std', prompt: 'a fox', settings: {}, media: {}, count: 1 };
     expect((await call('POST', '/studio/generate', { as: 'viewer', body: ok })).status).toBe(403);
-    expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, modelId: 'nope' } })).status).toBe(404);
+    expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, modelId: 'nope' } })).status).toBe(400);
     expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, prompt: '   ' } })).status).toBe(400);
     expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, settings: { duration: 100 } } })).status).toBe(400);
     expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, count: 9 } })).status).toBe(400);
-    expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, modelId: 'soul-2', media: { start: ['https://x.test/a.png'] } } })).status).toBe(400);
+    expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, modelId: 'z-image-turbo', media: { start: ['https://x.test/a.png'] } } })).status).toBe(400);
+    expect((await call('POST', '/studio/generate', { as: 'user', body: { ...ok, mode: 'image' } })).status).toBe(400); // start frame required
   });
 
-  it('generates, stores results in the media timeline, and records usage with admin-set prices', async () => {
-    expect((await call('PUT', '/settings/studio-prices', { as: 'user', body: { prices: { 'kling-3-std': 0.5 } } })).status).toBe(403);
-    expect((await call('PUT', '/settings/studio-prices', { as: 'admin', body: { prices: { 'kling-3-std': 0.5 } } })).status).toBe(200);
+  it('generates, stores results, and prices per second of video x outputs (admin-set price)', async () => {
+    expect((await call('PUT', '/settings/studio-prices', { as: 'user', body: { prices: { 'kling-3-std': 0.05 } } })).status).toBe(403);
+    expect((await call('PUT', '/settings/studio-prices', { as: 'admin', body: { prices: { 'kling-3-std': 0.05 } } })).status).toBe(200);
     expect((await call('PUT', '/settings/studio-prices', { as: 'admin', body: { prices: { bogus: 1 } } })).status).toBe(400);
 
-    const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'kling-3-std', prompt: 'a fox in snow', count: 3 } });
+    const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'kling-3-std', prompt: 'a fox in snow', settings: { duration: 10 }, count: 3 } });
     expect(g.status).toBe(202);
     expect(g.json.run.kind).toBe('generation');
     const done = await waitRun(g.json.run.id);
     expect(done.run.status).toBe('completed');
     expect(done.run.simulated).toBe(true);
     expect(done.run.output.assets).toHaveLength(3);
-    expect(done.run.costUsd).toBeCloseTo(1.5, 6);
+    expect(done.run.costUsd).toBeCloseTo(0.05 * 10 * 3, 6);
     expect(done.logs.map((l: any) => l.message).join('\n')).toMatch(/SIMULATED/);
 
     const m = (await call('GET', `/media?source=studio&runId=${g.json.run.id}`, { as: 'viewer' })).json;
     expect(m.total).toBe(3);
     expect(m.items[0]).toMatchObject({ type: 'video', title: 'a fox in snow' });
-    expect(m.items[0].metadata).toMatchObject({ source: 'studio', model: 'kling-3-std', simulated: true });
+    expect(m.items[0].metadata).toMatchObject({ source: 'studio', model: 'kling-3-std', mode: 'text', simulated: true });
     const usage = await db.query(`SELECT SUM(units)::float8 AS u, SUM(cost_usd)::float8 AS c FROM usage_events WHERE run_id=$1 AND provider='higgsfield'`, [g.json.run.id]);
     expect(usage.rows[0]).toMatchObject({ u: 3, c: 1.5 });
   });
 
-  it('uses the native batch for Soul (one request, batch_size) and unpriced models cost $0', async () => {
-    const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'soul-2', prompt: 'portrait', settings: { batchSize: '4' }, count: 3 } });
+  it('Soul batch is one request; unpriced models cost $0', async () => {
+    const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'soul-2', prompt: 'portrait', settings: { batch_size: '4' }, count: 3 } });
     const done = await waitRun(g.json.run.id);
     expect(done.run.status).toBe('completed');
     expect(done.run.costUsd).toBe(0);
     expect(done.run.output.assets).toHaveLength(1); // simulated platform returns one image per request; count is ignored with native batching
   });
+
+  it('uploads and characters need a connection', async () => {
+    const up = await fetch(base + '/api/studio/uploads?filename=a.png', { method: 'POST', headers: { 'content-type': 'image/png', authorization: `Bearer ${tokens.user}` }, body: new Uint8Array([1, 2, 3]) });
+    expect(up.status).toBe(400);
+    expect((await call('GET', '/studio/characters', { as: 'viewer' })).json).toEqual({ connected: false, characters: [] });
+    expect((await call('POST', '/studio/characters', { as: 'user', body: { name: 'X', imageUrls: ['https://a/1.png'], confirmedCost: true } })).status).toBe(400);
+  });
 });
 
 describe('studio API (against a fake Higgsfield platform)', () => {
-  it('rejects unsafe base URLs, then connects', async () => {
+  it('rejects unsafe base URLs, trims pasted model paths, then connects', async () => {
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: 'ftp://x.test' } })).status).toBe(400);
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: 'http://user:pw@x.test' } })).status).toBe(400);
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: 'not a url' } })).status).toBe(400);
@@ -206,7 +286,7 @@ describe('studio API (against a fake Higgsfield platform)', () => {
     expect(JSON.stringify(m)).not.toContain('secret-value');
   });
 
-  it('submits to the model path with the Key header, polls, and stores the returned video', async () => {
+  it('submits to the mode path with the Key header and an Idempotency-Key, polls, and stores the video', async () => {
     fake.script = 'video';
     fake.seen.length = 0;
     const g = await call('POST', '/studio/generate', {
@@ -220,29 +300,66 @@ describe('studio API (against a fake Higgsfield platform)', () => {
     const post = fake.seen.find((s) => s.method === 'POST')!;
     expect(post.url).toBe('/kling-video/v3.0/pro/image-to-video');
     expect(post.auth).toBe('Key key-id:secret-value');
+    expect(post.idem).toMatch(/^[0-9a-f-]{36}$/);
     expect(post.body).toMatchObject({ prompt: 'drone shot', duration: 8, sound: 'off', image_url: 'https://img.test/start.png' });
     expect(fake.seen.filter((s) => s.method === 'GET').every((s) => /^\/requests\/req-\d+\/status$/.test(s.url) && s.auth === 'Key key-id:secret-value')).toBe(true);
 
-    expect(done.run.output.assets).toHaveLength(1);
     expect(done.run.output.assets[0]).toMatchObject({ type: 'video', url: expect.stringMatching(/^https:\/\/cdn\.test\/req-\d+\.mp4$/) });
     expect(done.logs.map((l: any) => l.message).join('\n')).not.toMatch(/SIMULATED/);
   });
 
-  it('stores every image a request returns', async () => {
+  it('stores every image a request returns and sends the character on Soul 2', async () => {
     fake.script = 'image2';
-    const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'flux-2', prompt: 'two images' } });
+    fake.seen.length = 0;
+    const char = '8b1d9cae-1111-4222-8333-444455556666';
+    const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'soul-2', prompt: 'two images', settings: { custom_reference_id: char, batch_size: '4' } } });
     const done = await waitRun(g.json.run.id);
     expect(done.run.output.assets.map((a: any) => a.type)).toEqual(['photo', 'photo']);
+    expect(fake.seen.find((s) => s.method === 'POST')!.body).toMatchObject({ custom_reference_id: char, batch_size: 4 });
+  });
+
+  it('uploads a local file via the platform upload API and keeps it in the library', async () => {
+    fake.seen.length = 0;
+    const res = await fetch(base + '/api/studio/uploads?filename=my%20photo.png', { method: 'POST', headers: { 'content-type': 'image/png', authorization: `Bearer ${tokens.user}` }, body: new Uint8Array([137, 80, 78, 71]) });
+    // The fake's presigned upload_url is deliberately unreachable (.invalid), so the PUT fails and surfaces as a clear 502
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error.message).not.toContain('secret-value');
+    expect(fake.seen[0]).toMatchObject({ method: 'POST', url: '/files/generate-upload-url', auth: 'Key key-id:secret-value', body: { content_type: 'image/png' } });
+    // Unsupported types and oversized/empty bodies are refused before anything is sent
+    const bad = await fetch(base + '/api/studio/uploads', { method: 'POST', headers: { 'content-type': 'application/zip', authorization: `Bearer ${tokens.user}` }, body: new Uint8Array([1]) });
+    expect(bad.status).toBe(400);
+    const viewer = await fetch(base + '/api/studio/uploads', { method: 'POST', headers: { 'content-type': 'image/png', authorization: `Bearer ${tokens.viewer}` }, body: new Uint8Array([1]) });
+    expect(viewer.status).toBe(403);
+  });
+
+  it('lists characters and requires explicit cost confirmation to create one', async () => {
+    const list = (await call('GET', '/studio/characters', { as: 'viewer' })).json;
+    expect(list.connected).toBe(true);
+    expect(list.characters).toEqual([
+      { id: '8b1d9cae-1111-4222-8333-444455556666', name: 'Mia', status: 'completed', thumbnailUrl: 'https://cdn.test/mia.jpg' },
+      { id: 'aaaaaaaa-1111-4222-8333-444455556666', name: 'Draft', status: 'training', thumbnailUrl: null },
+    ]);
+    const payload = { name: 'Zoe', imageUrls: ['https://cdn.test/z1.png', 'https://cdn.test/z2.png'] };
+    expect((await call('POST', '/studio/characters', { as: 'user', body: payload })).status).toBe(400); // no confirmedCost
+    expect((await call('POST', '/studio/characters', { as: 'viewer', body: { ...payload, confirmedCost: true } })).status).toBe(403);
+    fake.seen.length = 0;
+    const made = await call('POST', '/studio/characters', { as: 'user', body: { ...payload, confirmedCost: true } });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ id: 'bbbbbbbb-1111-4222-8333-444455556666', name: 'Zoe', status: 'training' });
+    expect(fake.seen[0].body).toEqual({ name: 'Zoe', model_version: 'v2', input_images: [{ type: 'image_url', image_url: 'https://cdn.test/z1.png' }, { type: 'image_url', image_url: 'https://cdn.test/z2.png' }] });
+    const usage = await db.query(`SELECT cost_usd FROM usage_events WHERE model='soul-id'`);
+    expect(usage.rows[0].cost_usd).toBe(2.5);
   });
 
   it('fails the run clearly on moderation blocks and on API errors', async () => {
     fake.script = 'nsfw';
-    const a = await waitRun((await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'flux-2', prompt: 'blocked' } })).json.run.id);
+    const a = await waitRun((await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'z-image-turbo', prompt: 'blocked' } })).json.run.id);
     expect(a.run.status).toBe('failed');
     expect(a.run.error).toMatch(/content moderation/);
 
     fake.script = 'reject';
-    const b = await waitRun((await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'flux-2', prompt: 'rejected' } })).json.run.id);
+    const b = await waitRun((await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'z-image-turbo', prompt: 'rejected' } })).json.run.id);
     expect(b.run.status).toBe('failed');
     expect(b.run.error).toBe('Higgsfield API responded 422: prompt too long');
     expect(JSON.stringify(b)).not.toContain('secret-value');
@@ -253,7 +370,7 @@ describe('workflow Generate node', () => {
   const def = (extra: Record<string, unknown> = {}) => ({
     nodes: [
       { id: 't', type: 'trigger', data: { source: 'manual', sampleInput: 'a lighthouse' } },
-      { id: 'g', type: 'generate', data: { model: 'flux-2', prompt: 'Photo of {{input}}', ...extra } },
+      { id: 'g', type: 'generate', data: { model: 'z-image-turbo', prompt: 'Photo of {{input}}', ...extra } },
       { id: 'o', type: 'output', data: {} },
     ],
     edges: [{ id: '1', source: 't', target: 'g' }, { id: '2', source: 'g', target: 'o' }],
@@ -268,8 +385,17 @@ describe('workflow Generate node', () => {
     expect(done.run.status).toBe('completed');
     expect(fake.seen.find((s) => s.method === 'POST')!.body.prompt).toBe('Photo of a lighthouse');
     expect(done.run.output.result.assets).toHaveLength(2);
-    const media = (await call('GET', `/media?workflowId=${wf.id}`, { as: 'viewer' })).json;
-    expect(media.total).toBe(2);
+    expect((await call('GET', `/media?workflowId=${wf.id}`, { as: 'viewer' })).json.total).toBe(2);
+  });
+
+  it('a start-frame URL switches the node to image mode automatically', async () => {
+    fake.script = 'video';
+    fake.seen.length = 0;
+    const d = def({ model: 'kling-3-turbo', startUrl: 'https://img.test/{{input}}.png' });
+    const wf = (await call('POST', '/workflows', { as: 'user', body: { name: 'Anim WF', definition: d } })).json;
+    const done = await waitRun((await call('POST', `/workflows/${wf.id}/run`, { as: 'user', body: { input: { text: 'cat' } } })).json.run.id);
+    expect(done.run.status).toBe('completed');
+    expect(fake.seen.find((s) => s.method === 'POST')!).toMatchObject({ url: '/kling-video/v3.0-turbo/image-to-video', body: { image_url: 'https://img.test/cat.png' } });
   });
 
   it('is validated on save/run', async () => {

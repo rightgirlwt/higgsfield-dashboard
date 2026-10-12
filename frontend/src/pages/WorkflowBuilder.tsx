@@ -539,13 +539,13 @@ function Inspector({ node, models, studioCatalog, disabled, onChange, onDelete }
           <Field label="Prompt" htmlFor="i-gprompt" hint={<>Use <code>{'{{input}}'}</code> for the previous node’s output.</>}>
             <Textarea id="i-gprompt" rows={4} disabled={disabled} value={d.prompt ?? ''} onChange={(e) => onChange({ prompt: e.target.value })} />
           </Field>
-          {studioCatalog?.models.find((m) => m.id === d.model && (m.roles.start ?? 0) > 0) && (
-            <Field label="Start frame URL (optional)" htmlFor="i-gstart"><Input id="i-gstart" disabled={disabled} value={d.startUrl ?? ''} placeholder="https://… or {{input}}" onChange={(e) => onChange({ startUrl: e.target.value })} /></Field>
+          {studioCatalog?.models.find((m) => m.id === d.model && m.modes.some((md) => md.media.some((i) => i.role === 'start'))) && (
+            <Field label="Start frame URL (optional)" htmlFor="i-gstart" hint="With a start frame the node switches to image mode automatically."><Input id="i-gstart" disabled={disabled} value={d.startUrl ?? ''} placeholder="https://… or {{input}}" onChange={(e) => onChange({ startUrl: e.target.value })} /></Field>
           )}
-          {studioCatalog?.models.find((m) => m.id === d.model && (m.roles.end ?? 0) > 0) && (
+          {studioCatalog?.models.find((m) => m.id === d.model && m.modes.some((md) => md.media.some((i) => i.role === 'end'))) && (
             <Field label="End frame URL (optional)" htmlFor="i-gend"><Input id="i-gend" disabled={disabled} value={d.endUrl ?? ''} onChange={(e) => onChange({ endUrl: e.target.value })} /></Field>
           )}
-          {studioCatalog?.models.find((m) => m.id === d.model && !m.nativeBatch) && (
+          {studioCatalog?.models.find((m) => m.id === d.model && !m.modes.some((md) => 'batch_size' in md.params)) && (
             <Field label="How many" htmlFor="i-gcount">
               <Select id="i-gcount" disabled={disabled} value={d.count ?? 1} onChange={(e) => onChange({ count: Number(e.target.value) })}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}</Select>
             </Field>
