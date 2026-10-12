@@ -5,6 +5,7 @@ import { Badge, Button, Card, CardHeader, cx, EmptyState, ErrorState, Input, Pag
 import { api } from '../lib/api';
 import { ms, num, timeAgo, usd } from '../lib/format';
 import { useApi, useDebounced, useDocumentTitle } from '../lib/hooks';
+import { cssColor } from '../lib/theme';
 import { qs } from '../lib/api';
 import type { Alert, Run, RunLog, WorkflowListItem } from '../lib/types';
 import { useRealtime } from '../state/Realtime';
@@ -17,7 +18,8 @@ const levelStyle: Record<string, string> = {
   debug: 'text-slate-500',
 };
 const levelBadge = { error: 'rose', warn: 'amber', info: 'cyan', debug: 'slate' } as const;
-const tooltipStyle = { background: '#0f172a', border: '1px solid #334155', borderRadius: 12, color: '#e2e8f0' } as const;
+const tooltipStyle = { background: cssColor('slate-900'), border: `1px solid ${cssColor('slate-700')}`, borderRadius: 12, color: cssColor('slate-100') } as const;
+const AXIS = cssColor('slate-400');
 
 function Tile({ label, value, tone = 'text-slate-100', hint }: { label: string; value: string; tone?: string; hint?: string }) {
   return (
@@ -135,13 +137,13 @@ export default function Monitoring() {
             <div role="img" aria-label="Line chart of average latency and queue size over the last few minutes" className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                  <CartesianGrid stroke="#1e293b" vertical={false} />
-                  <XAxis dataKey="time" tick={{ fill: '#94a3b8', fontSize: 11 }} minTickGap={32} axisLine={false} tickLine={false} />
-                  <YAxis yAxisId="l" tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={(v: number) => `${v}ms`} axisLine={false} tickLine={false} width={52} />
-                  <YAxis yAxisId="q" orientation="right" allowDecimals={false} tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} width={28} />
+                  <CartesianGrid stroke={cssColor('slate-800')} vertical={false} />
+                  <XAxis dataKey="time" tick={{ fill: AXIS, fontSize: 11 }} minTickGap={32} axisLine={false} tickLine={false} />
+                  <YAxis yAxisId="l" tick={{ fill: AXIS, fontSize: 11 }} tickFormatter={(v: number) => `${v}ms`} axisLine={false} tickLine={false} width={52} />
+                  <YAxis yAxisId="q" orientation="right" allowDecimals={false} tick={{ fill: AXIS, fontSize: 11 }} axisLine={false} tickLine={false} width={28} />
                   <Tooltip contentStyle={tooltipStyle} />
-                  <Line yAxisId="l" type="monotone" dataKey="latencyMs" name="Latency (ms)" stroke="#22d3ee" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  <Line yAxisId="q" type="stepAfter" dataKey="queueSize" name="Queue" stroke="#a78bfa" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="l" type="monotone" dataKey="latencyMs" name="Latency (ms)" stroke={cssColor('cyan-500')} strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="q" type="stepAfter" dataKey="queueSize" name="Queue" stroke={cssColor('violet-500')} strokeWidth={2} dot={false} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

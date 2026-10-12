@@ -2,10 +2,11 @@ import { ArrowDownRight, ArrowUpRight, Download, FileText, FlaskConical, Play } 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, PageHeader, ProgressBar, Skeleton, StatusBadge, Tabs } from '../components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, PageHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { ms, num, pct, timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
+import { cssColor } from '../lib/theme';
 import type { BreakdownRow, Run, SpendPoint, Summary } from '../lib/types';
 import { useRealtime } from '../state/Realtime';
 import { useToast } from '../state/Toast';
@@ -13,12 +14,12 @@ import { useToast } from '../state/Toast';
 type Range = '7d' | '30d' | '90d';
 type By = 'model' | 'workflow' | 'provider';
 
-function Delta({ v }: { v: number | null }) {
-  if (v === null) return <Badge tone="slate">new</Badge>;
+function Delta({ v, hero }: { v: number | null; hero?: boolean }) {
+  if (v === null) return <Badge tone="slate" className={hero ? '!bg-white/20 !text-white' : undefined}>new</Badge>;
   const up = v >= 0;
   const Icon = up ? ArrowUpRight : ArrowDownRight;
   return (
-    <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">
+    <span className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${hero ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-200'}`}>
       <Icon className="h-3 w-3" aria-hidden />
       {pct(v)}
       <span className="sr-only"> versus the previous period</span>
@@ -26,21 +27,23 @@ function Delta({ v }: { v: number | null }) {
   );
 }
 
-function Kpi({ label, value, delta, sub, children }: { label: string; value: string; delta?: number | null; sub?: string; children?: React.ReactNode }) {
+/** `hero` = the accent-coloured highlight card (like the "Quick access" hero in the design reference). */
+function Kpi({ label, value, delta, sub, children, hero }: { label: string; value: string; delta?: number | null; sub?: string; children?: React.ReactNode; hero?: boolean }) {
   return (
-    <Card className="p-5">
+    <Card className={hero ? '!border-transparent !bg-cyan-500 p-5 text-white' : 'p-5'}>
       <div className="mb-5 flex items-center justify-between gap-2">
-        <h3 className="text-sm text-slate-400">{label}</h3>
-        {delta !== undefined && <Delta v={delta} />}
+        <h3 className={`text-sm ${hero ? 'text-white/85' : 'text-slate-400'}`}>{label}</h3>
+        {delta !== undefined && <Delta v={delta} hero={hero} />}
       </div>
-      <div className="text-3xl font-semibold tracking-tight">{value}</div>
-      {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
+      <div className={`text-3xl font-semibold tracking-tight ${hero ? 'text-white' : 'text-slate-100'}`}>{value}</div>
+      {sub && <p className={`mt-1 text-xs ${hero ? 'text-white/75' : 'text-slate-500'}`}>{sub}</p>}
       {children}
     </Card>
   );
 }
 
-const tooltipStyle = { background: '#0f172a', border: '1px solid #334155', borderRadius: 12, color: '#e2e8f0' } as const;
+const tooltipStyle = { background: cssColor('slate-900'), border: `1px solid ${cssColor('slate-700')}`, borderRadius: 12, color: cssColor('slate-100') } as const;
+const AXIS = cssColor('slate-400');
 
 export default function Overview() {
   useDocumentTitle('Overview');
@@ -113,16 +116,18 @@ export default function Overview() {
             Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-36" />)
           ) : (
             <>
-              <Kpi label={`Estimated spend (${s.rangeDays}d)`} value={usd(s.spend.value)} delta={s.spend.deltaPct}>
+              <Kpi hero label={`Estimated spend (${s.rangeDays}d)`} value={usd(s.spend.value)} delta={s.spend.deltaPct}>
                 {budget && budget.monthlyUsd > 0 ? (
                   <div className="mt-3 space-y-1">
-                    <ProgressBar value={budget.pct ?? 0} tone={budgetTone} label="Monthly budget used" />
-                    <p className="text-xs text-slate-500">
+                    <div role="progressbar" aria-label="Monthly budget used" aria-valuenow={Math.round(Math.min(100, budget.pct ?? 0))} aria-valuemin={0} aria-valuemax={100} className="h-2 overflow-hidden rounded-full bg-white/25">
+                      <div className={`h-full rounded-full ${budgetTone === 'rose' ? 'bg-rose-300' : budgetTone === 'amber' ? 'bg-amber-300' : 'bg-white'}`} style={{ width: `${Math.min(100, budget.pct ?? 0)}%` }} />
+                    </div>
+                    <p className="text-xs text-white/80">
                       {usd(budget.monthToDateUsd)} of {usd(budget.monthlyUsd)} monthly budget ({budget.pct?.toFixed(0)}%)
                     </p>
                   </div>
                 ) : (
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1 text-xs text-white/80">
                     No budget set · <Link className="underline" to="/settings">set one</Link>
                   </p>
                 )}
@@ -146,13 +151,13 @@ export default function Overview() {
             <div role="img" aria-label={`Daily spend over ${range}, total ${usd(totalSpend)}. Claude and Higgsfield stacked.`} className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={spend.data} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                  <CartesianGrid stroke="#1e293b" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} minTickGap={24} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} axisLine={false} tickLine={false} width={48} />
+                  <CartesianGrid stroke={cssColor('slate-800')} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fill: AXIS, fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} minTickGap={24} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: AXIS, fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} axisLine={false} tickLine={false} width={48} />
                   <Tooltip contentStyle={tooltipStyle} formatter={(v) => usd(Number(v))} cursor={{ fill: 'rgba(148,163,184,0.08)' }} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="claude" name="Claude" stackId="a" fill="#22d3ee" />
-                  <Bar dataKey="higgsfield" name="Higgsfield" stackId="a" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="claude" name="Claude" stackId="a" fill={cssColor('violet-500')} />
+                  <Bar dataKey="higgsfield" name="Higgsfield" stackId="a" fill={cssColor('cyan-500')} radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

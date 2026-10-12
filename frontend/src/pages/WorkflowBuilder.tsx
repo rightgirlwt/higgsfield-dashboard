@@ -22,6 +22,7 @@ import { Badge, Button, Card, CardHeader, cx, ErrorState, Field, Input, Modal, S
 import { api, errorMessage } from '../lib/api';
 import { dateTime, ms, timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
+import { cssColor } from '../lib/theme';
 import type { ModelInfo, NodeType, Run, RunLog, StudioCatalog, ValidationIssue, Workflow, WorkflowDefinition } from '../lib/types';
 import { useRealtime } from '../state/Realtime';
 import { useToast } from '../state/Toast';
@@ -367,9 +368,9 @@ function Builder({ initial }: { initial: Workflow }) {
               fitViewOptions={{ padding: 0.25 }}
               proOptions={{ hideAttribution: true }}
             >
-              <Background color="#1e293b" gap={20} />
+              <Background color={cssColor('slate-700')} gap={20} />
               <Controls showInteractive={false} />
-              <MiniMap pannable zoomable style={{ width: 120, height: 80 }} nodeColor="#475569" nodeStrokeWidth={0} maskColor="rgba(2,6,23,0.7)" />
+              <MiniMap pannable zoomable style={{ width: 120, height: 80 }} nodeColor={cssColor('slate-500')} nodeStrokeWidth={0} maskColor={cssColor('slate-950', 0.7)} />
             </ReactFlow>
           </div>
         </Card>

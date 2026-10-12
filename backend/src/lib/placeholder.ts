@@ -1,10 +1,11 @@
 /** Self-contained SVG thumbnails (data URIs) so the media timeline works with no external image hosting. */
+// Brand palette (#99577A mauve + muted teal and warm neutrals); no purples.
 const PALETTES: [string, string][] = [
-  ['#0e7490', '#6d28d9'],
-  ['#be185d', '#7c3aed'],
-  ['#047857', '#0369a1'],
-  ['#b45309', '#be123c'],
-  ['#4338ca', '#0f766e'],
+  ['#99577A', '#5A3248'],
+  ['#BE7FA0', '#99577A'],
+  ['#3D8B96', '#264A52'],
+  ['#B45309', '#99577A'],
+  ['#6D3B56', '#3D8B96'],
 ];
 
 function hash(s: string): number {

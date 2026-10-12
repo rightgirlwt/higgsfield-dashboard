@@ -6,7 +6,7 @@ export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Bool
 
 export function Card({ children, className, ...rest }: { children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cx('rounded-2xl border border-slate-800 bg-slate-900/80 shadow-lg shadow-slate-950/50', className)} {...rest}>
+    <div className={cx('rounded-3xl border border-slate-800 bg-slate-900 shadow-card', className)} {...rest}>
       {children}
     </div>
   );
@@ -26,8 +26,9 @@ export function CardHeader({ eyebrow, title, action }: { eyebrow?: string; title
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 const variants: Record<Variant, string> = {
-  primary: 'bg-cyan-500 text-slate-950 hover:bg-cyan-400 disabled:bg-cyan-500/40',
-  secondary: 'border border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700 disabled:opacity-50',
+  // White text on the #99577A brand colour is 5.2:1 contrast (WCAG AA).
+  primary: 'bg-cyan-500 text-white shadow-sm hover:bg-cyan-600 disabled:bg-cyan-500/40',
+  secondary: 'border border-slate-700 bg-slate-900 text-slate-100 shadow-sm hover:bg-slate-800 disabled:opacity-50',
   ghost: 'text-slate-300 hover:bg-slate-800 disabled:opacity-50',
   danger: 'bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-50',
 };
@@ -147,7 +148,7 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" onClick={onClose} aria-hidden />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} aria-hidden />
       <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className={cx('relative max-h-[90vh] w-full overflow-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl animate-fade-in', wide ? 'max-w-3xl' : 'max-w-lg')}>
         <div className="mb-4 flex items-center justify-between">
           <h2 id={titleId} className="text-lg font-semibold">
@@ -191,7 +192,7 @@ export function Tabs<T extends string>({ tabs, value, onChange, label }: { tabs:
   return (
     <div role="tablist" aria-label={label} className="flex flex-wrap gap-1 rounded-xl border border-slate-800 bg-slate-950/60 p-1">
       {tabs.map((t) => (
-        <button key={t.id} role="tab" aria-selected={value === t.id} onClick={() => onChange(t.id)} className={cx('rounded-lg px-3 py-1.5 text-sm transition', value === t.id ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-100')}>
+        <button key={t.id} role="tab" aria-selected={value === t.id} onClick={() => onChange(t.id)} className={cx('rounded-lg px-3 py-1.5 text-sm transition', value === t.id ? 'bg-slate-900 text-slate-100 shadow-sm' : 'text-slate-400 hover:text-slate-100')}>
           {t.label}
         </button>
       ))}

@@ -22,7 +22,7 @@ export default function ClerkAuth({ children }: { children: ReactNode }) {
     );
   }
   return (
-    <ClerkProvider publishableKey={key} appearance={{ variables: { colorPrimary: '#22d3ee', colorBackground: '#0f172a', colorText: '#e2e8f0' } }}>
+    <ClerkProvider publishableKey={key} appearance={{ variables: { colorPrimary: '#99577A', colorBackground: '#ffffff', colorText: '#21191F' } }}>
       <SignedOut>
         <main className="grid min-h-screen place-items-center p-4">
           <SignIn routing="hash" />

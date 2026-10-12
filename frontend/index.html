@@ -1,14 +1,21 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
       content="Higgsfield dashboard and studio for AI workflow management, prompt engineering, and operational monitoring."
     />
     <title>Higgsfield Studio</title>
+    <script>
+      // Apply the saved theme before first paint so there's no light/dark flash. Light is the default.
+      try {
+        var t = localStorage.getItem('hf_theme');
+        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

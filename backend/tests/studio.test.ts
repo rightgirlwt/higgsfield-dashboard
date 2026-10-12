@@ -7,7 +7,7 @@ import { createDb, type Db } from '../src/db';
 import { migrate } from '../src/db/migrations';
 import { seedDemo } from '../src/db/seed';
 import { prepareGeneration } from '../src/services/studio';
-import { buildRequest, getStudioModel, pickMode, resolveMedia, resolveSettings, STUDIO_MODELS, type MediaRole } from '../src/services/studioCatalog';
+import { billedSeconds, buildRequest, getStudioModel, LIST_PRICES, pickMode, resolveMedia, resolveSettings, STUDIO_MODELS, unitPrice, type MediaRole } from '../src/services/studioCatalog';
 
 /** Validate + build exactly what would be sent to the platform. */
 const plan = (modelId: string, p: { mode?: string; prompt?: string; settings?: Record<string, any>; media?: Partial<Record<MediaRole, string[]>> } = {}) =>
@@ -93,6 +93,26 @@ describe('studio catalog (data-driven)', () => {
     expect(() => plan('kling-3-std', { media: { start: ['javascript:alert(1)'] } })).toThrow(/http\(s\)/);
     expect(() => plan('kling-3-std', { mode: 'warp' })).toThrow(/no "warp" mode/);
     expect(() => plan('kling-3-std', { prompt: '  ' })).toThrow(/Write a prompt/);
+  });
+
+  it('every mode has a list price in the right unit, and unitPrice picks resolution rates, ranges and admin overrides', () => {
+    for (const m of STUDIO_MODELS) {
+      for (const mode of m.modes) {
+        const lp = LIST_PRICES[mode.path];
+        expect(lp, `${m.id}/${mode.id} (${mode.path})`).toBeDefined();
+        expect(lp.unit).toBe(m.priceUnit === 'second' ? 'second' : 'image');
+        expect(lp.min).toBeGreaterThan(0);
+        expect(lp.max).toBeGreaterThanOrEqual(lp.min);
+      }
+    }
+    const soul = getStudioModel('soul-2')!.modes[0];
+    expect(unitPrice(soul, { resolution: '1080p' }, null)).toEqual({ amount: 0.0057, precision: 'exact', basis: 'list' });
+    const seed = getStudioModel('seedance-2-5')!.modes[0];
+    expect(unitPrice(seed, { resolution: '720p' }, null)).toEqual({ amount: 0.144, precision: 'from', basis: 'list' });
+    expect(unitPrice(seed, {}, 0.5)).toEqual({ amount: 0.5, precision: 'exact', basis: 'admin' });
+    const motion = getStudioModel('kling-3-motion-std')!;
+    expect(billedSeconds(motion, motion.modes[0], {})).toBe(5); // billed by the input video's length: assumption
+    expect(billedSeconds(getStudioModel('kling-3-std')!, getStudioModel('kling-3-std')!.modes[0], { duration: 8 })).toBe(8);
   });
 
   it('pickMode prefers the mode whose inputs match what was provided', () => {
@@ -246,12 +266,23 @@ describe('studio API (simulated mode)', () => {
     expect(usage.rows[0]).toMatchObject({ u: 3, c: 1.5 });
   });
 
-  it('Soul batch is one request; unpriced models cost $0', async () => {
+  it('Soul batch is one request; with no admin price it uses Higgsfield’s per-resolution list price', async () => {
     const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'soul-2', prompt: 'portrait', settings: { batch_size: '4' }, count: 3 } });
     const done = await waitRun(g.json.run.id);
     expect(done.run.status).toBe('completed');
-    expect(done.run.costUsd).toBe(0);
     expect(done.run.output.assets).toHaveLength(1); // simulated platform returns one image per request; count is ignored with native batching
+    expect(done.run.costUsd).toBeCloseTo(0.0032, 8); // 720p list price x 1 image
+    const hi = await waitRun((await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'soul-2', prompt: 'portrait', settings: { resolution: '1080p' } } })).json.run.id);
+    expect(hi.run.costUsd).toBeCloseTo(0.0057, 8);
+    expect(hi.logs.map((l: any) => l.message).join('\n')).toMatch(/list price/);
+  });
+
+  it('exposes list prices per mode in the catalog', async () => {
+    const m = (await call('GET', '/studio/models', { as: 'viewer' })).json;
+    expect(m.pricesAsOf).toBe('2026-10-12');
+    const soul = m.models.find((x: any) => x.id === 'soul-2');
+    expect(soul.modes[0].price).toMatchObject({ unit: 'image', min: 0.0032, max: 0.0057, byResolution: { '720p': 0.0032, '1080p': 0.0057 } });
+    expect(m.models.find((x: any) => x.id === 'kling-3-turbo').modes[0].price).toMatchObject({ unit: 'second', promoEnds: '2026-10-18' });
   });
 
   it('uploads and characters need a connection', async () => {

@@ -102,3 +102,13 @@ Known gaps / design notes:
 - **Search is substring (`ILIKE`)**, not full‑text.
 - **No SSO/SCIM, audit log, or per‑project permissions**; "projects" exist in the schema but aren't surfaced in the UI.
 - Running (not queued) jobs can't be cancelled.
+
+## Design & theming
+
+- **Brand colour `#99577A`** (a muted mauve) drives the whole UI: sidebar, buttons, links, charts and highlights. The interface is **light by default** (white rounded cards, soft tinted background, a colored sidebar with a white active pill) with a **dark theme** one click away (moon/sun button in the header; your choice is remembered).
+- All colours are CSS variables generated into `frontend/src/theme.css`. To change the brand colour, edit the `brand` scale in `frontend/scripts/generate-theme.cjs` and run `npm --prefix frontend run theme`. Components use theme-aware classes, so nothing else needs touching. Restart `npm run dev:frontend` after changing Tailwind or theme files.
+- A muted teal is the secondary colour (second chart series, some badges). White text on the brand colour meets WCAG AA contrast (5.2:1).
+
+## Costs
+
+Studio estimates and records spend using **Higgsfield's published prices** (snapshot dated in `backend/src/services/studioCatalog.ts`, `LIST_PRICES`), matched to the model, mode and resolution (e.g. Soul 2 is $0.0032 per image at 720p and $0.0057 at 1080p). Most video models carry a promotional rate until 2026-10-18 and will cost more afterwards, so refresh the snapshot after that date. These are estimates; Higgsfield's billing page is authoritative. An admin can override any model with a flat price in Settings → Higgsfield.

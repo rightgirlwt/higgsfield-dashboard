@@ -108,8 +108,14 @@ export default function Studio() {
 
   const nativeBatch = !!mode && 'batch_size' in mode.params;
   const outputs = nativeBatch ? Number(settings.batch_size ?? 1) : count;
-  const seconds = model?.priceUnit === 'second' && typeof settings.duration === 'number' ? settings.duration : 1;
-  const estimate = model?.priceUsd != null ? model.priceUsd * seconds * outputs : null;
+  const lp = mode?.price ?? null;
+  const seconds = model?.priceUnit !== 'second' ? 1 : typeof settings.duration === 'number' ? settings.duration : (lp?.assumedSeconds ?? 1);
+  // Admin-set price wins; otherwise Higgsfield's list price (exact for the chosen resolution when published, else the low end of its range).
+  const unit = model?.priceUsd != null ? model.priceUsd : lp ? (lp.byResolution?.[settings.resolution] ?? lp.min) : null;
+  const exact = model?.priceUsd != null || !lp || lp.byResolution?.[settings.resolution] !== undefined || lp.min === lp.max;
+  const estimate = unit !== null ? unit * seconds * outputs : null;
+  const estimateMax = !exact && lp ? lp.max * seconds * outputs : null;
+  const promo = model?.priceUsd == null && lp?.promoEnds ? lp.promoEnds : null;
 
   const generate = async () => {
     if (!model || !mode) return;
@@ -212,7 +218,7 @@ export default function Studio() {
                   <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-slate-400">Mode</div>
                   <div role="tablist" aria-label="Mode" className="flex flex-wrap gap-1 rounded-xl border border-slate-800 bg-slate-950/60 p-1">
                     {model.modes.map((md) => (
-                      <button key={md.id} role="tab" aria-selected={md.id === mode.id} onClick={() => selectMode(md)} className={`rounded-lg px-3 py-1.5 text-sm transition ${md.id === mode.id ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-100'}`}>{md.label}</button>
+                      <button key={md.id} role="tab" aria-selected={md.id === mode.id} onClick={() => selectMode(md)} className={`rounded-lg px-3 py-1.5 text-sm transition ${md.id === mode.id ? 'bg-slate-900 text-slate-100 shadow-sm' : 'text-slate-400 hover:text-slate-100'}`}>{md.label}</button>
                     ))}
                   </div>
                 </div>
@@ -290,7 +296,17 @@ export default function Studio() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
               <p className="text-sm text-slate-400" aria-live="polite">
                 {outputs} {model.surface === 'image' ? 'image' : 'video'}{outputs > 1 ? 's' : ''}{model.priceUnit === 'second' && seconds > 1 ? ` × ${seconds}s` : ''} ·{' '}
-                {estimate !== null ? <>about <strong className="text-slate-200">{usd(estimate)}</strong> (your set price)</> : <>no price set — spend won’t be tracked{isAdmin && <> · <Link className="underline" to="/settings">set a price</Link></>}</>}
+                {estimate !== null ? (
+                  <>
+                    {exact ? 'about' : 'from'} <strong className="text-slate-200">{usd(estimate)}</strong>
+                    {estimateMax !== null && <> (up to {usd(estimateMax)})</>}{' '}
+                    <span className="text-slate-500">{model.priceUsd != null ? '(your set price)' : '(Higgsfield list price)'}</span>
+                    {model.priceUnit === 'second' && !('duration' in (mode?.params ?? {})) && <span className="text-slate-500"> · billed by input video length, assumed {seconds}s</span>}
+                    {promo && <span className="text-slate-500"> · promo rate until {promo}</span>}
+                  </>
+                ) : (
+                  <>no price known — spend won’t be tracked{isAdmin && <> · <Link className="underline" to="/settings">set a price</Link></>}</>
+                )}
               </p>
               <div className="flex items-center gap-3">
                 {missing && <span className="text-xs text-amber-300">{missing}</span>}

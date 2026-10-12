@@ -1,3 +1,4 @@
+@import './theme.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,9 +6,8 @@
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
-  color-scheme: dark;
-  color: #e2e8f0;
-  background-color: #020617;
+  color: rgb(var(--slate-200));
+  background-color: rgb(var(--slate-950));
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -22,9 +22,9 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top, rgba(34, 211, 238, 0.1), transparent 28%),
-    radial-gradient(circle at right, rgba(168, 85, 247, 0.1), transparent 20%),
-    #020617;
+    radial-gradient(circle at top, rgb(var(--cyan-500) / 0.1), transparent 28%),
+    radial-gradient(circle at right, rgb(var(--violet-500) / 0.08), transparent 20%),
+    rgb(var(--slate-950));
 }
 
 * {
@@ -40,7 +40,7 @@ button:disabled {
 
 /* Visible keyboard focus everywhere (WCAG 2.4.7) */
 :focus-visible {
-  outline: 2px solid #22d3ee;
+  outline: 2px solid rgb(var(--cyan-500));
   outline-offset: 2px;
   border-radius: 6px;
 }
@@ -56,10 +56,15 @@ button:disabled {
   }
 }
 
-/* Slim dark scrollbars */
+/* Slim scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: rgb(var(--slate-600)) transparent;
+}
+
+/* Native form controls (date pickers, selects' popups) follow the theme */
+::selection {
+  background: rgb(var(--cyan-500) / 0.35);
 }
 
 /* React Flow ships default boxes for node types named input/output/default; our custom nodes use
@@ -76,36 +81,41 @@ button:disabled {
   color: inherit;
 }
 .react-flow .react-flow__minimap {
-  background: #0f172a;
-  border: 1px solid #1e293b;
-  border-radius: 8px;
+  background: rgb(var(--slate-900));
+  border: 1px solid rgb(var(--slate-800));
+  border-radius: 12px;
 }
 
-/* React Flow dark theme tweaks */
+/* React Flow theme tweaks */
 .react-flow__attribution {
   display: none;
 }
+.react-flow__controls {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px -6px rgb(var(--shadow) / var(--shadow-alpha));
+}
 .react-flow__controls button {
-  background: #0f172a;
-  border-bottom: 1px solid #1e293b;
-  fill: #cbd5e1;
+  background: rgb(var(--slate-900));
+  border-bottom: 1px solid rgb(var(--slate-800));
+  fill: rgb(var(--slate-300));
 }
 .react-flow__controls button:hover {
-  background: #1e293b;
+  background: rgb(var(--slate-800));
 }
-.react-flow__minimap {
-  background: #0f172a;
+.react-flow__background {
+  background: transparent;
 }
 .react-flow__edge-path {
-  stroke: #64748b;
+  stroke: rgb(var(--slate-500));
   stroke-width: 2;
 }
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #22d3ee;
+  stroke: rgb(var(--cyan-500));
 }
 .react-flow__handle {
   width: 10px;
   height: 10px;
-  background: #22d3ee;
-  border: 2px solid #0f172a;
+  background: rgb(var(--cyan-500));
+  border: 2px solid rgb(var(--slate-900));
 }

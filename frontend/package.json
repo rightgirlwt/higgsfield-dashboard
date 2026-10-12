@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "theme": "node scripts/generate-theme.cjs src/theme.css"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.10",

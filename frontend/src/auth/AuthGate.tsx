@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { LogIn, ShieldCheck } from 'lucide-react';
-import { api, configureApi, errorMessage } from '../lib/api';
+import { api, ApiError, configureApi, errorMessage } from '../lib/api';
 import type { Me, Role } from '../lib/types';
 import { Badge, Button, Card, ErrorState, Spinner } from '../components/ui';
 import { AuthContext } from './context';
@@ -57,6 +57,8 @@ function DevAuth({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(readToken);
   const [me, setMe] = useState<Me | null>(null);
   const [checking, setChecking] = useState(!!token);
+  const [retry, setRetry] = useState(0);
+  const [serverError, setServerError] = useState<string | null>(null);
 
   const signOut = useCallback(() => {
     try {
@@ -75,16 +77,28 @@ function DevAuth({ children }: { children: ReactNode }) {
       return;
     }
     setChecking(true);
+    setServerError(null);
     api
       .get<Me>('/me')
       .then(setMe)
-      .catch(() => signOut())
+      .catch((e) => {
+        // Only a rejected session signs you out. A server hiccup (restart, 5xx, network) keeps your session and offers a retry.
+        if (e instanceof ApiError && e.status === 401) signOut();
+        else setServerError(errorMessage(e));
+      })
       .finally(() => setChecking(false));
-  }, [token, signOut]);
+  }, [token, signOut, retry]);
 
   const value = useMemo(() => (me ? { me, signOut, getToken: async () => token } : null), [me, signOut, token]);
 
   if (checking) return <div className="grid min-h-screen place-items-center"><Spinner label="Signing in" /></div>;
+  if (serverError && token && !me) {
+    return (
+      <div className="mx-auto mt-24 max-w-md p-4">
+        <ErrorState message={`The server isn’t responding (${serverError}). Your session is kept; try again in a moment.`} onRetry={() => setRetry((n) => n + 1)} />
+      </div>
+    );
+  }
   if (!value) {
     return (
       <DevLogin

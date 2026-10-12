@@ -209,21 +209,34 @@ function HiggsfieldTab({ s, onSaved }: { s: SettingsData; onSaved: () => void })
 
       <Card className="p-5">
         <CardHeader eyebrow="Spend tracking" title="Prices (USD)" />
-        <p className="mb-4 text-sm text-slate-400">The Higgsfield API doesn’t report cost, so enter what each model costs you: <strong>per image</strong> for image models and <strong>per second of video</strong> for video models (see open.higgsfield.ai/explore for current prices; they vary by resolution and promotions). Leave blank if unknown — those generations are recorded as $0.</p>
+        <p className="mb-4 text-sm text-slate-400">
+          Costs are <strong>pulled from Higgsfield’s published prices</strong> (snapshot taken {catalog.data?.pricesAsOf ?? '…'}), matched to the model, mode and resolution, so you don’t need to enter anything. Most video models are on a promotional rate that ends <strong>October 18</strong>, after which prices go up, so treat them as estimates. Fill in a box only to <strong>override</strong> a model with your own flat price (per image, or per second of video). Higgsfield’s own billing page is the final word on what you were charged.
+        </p>
         {!catalog.data ? <Skeleton className="h-40" /> : (
           <ul className="space-y-2">
-            {catalog.data.models.map((m) => (
-              <li key={m.id} className="flex items-center justify-between gap-3">
-                <label htmlFor={`price-${m.id}`} className="text-sm">{m.label} <span className="text-xs text-slate-500">({m.priceUnit === 'second' ? 'per second' : 'per image'})</span></label>
-                <div className="flex items-center gap-1">
-                  <span className="text-slate-500">$</span>
-                  <Input id={`price-${m.id}`} className="w-24" type="number" min={0} step="0.01" placeholder="—" value={prices[m.id] ?? ''} onChange={(e) => setPrices((p) => ({ ...p, [m.id]: e.target.value }))} />
-                </div>
-              </li>
-            ))}
+            {catalog.data.models.map((m) => {
+              const ps = m.modes.map((x) => x.price).filter((x): x is NonNullable<typeof x> => !!x);
+              const lo = ps.length ? Math.min(...ps.map((x) => x.min)) : null;
+              const hi = ps.length ? Math.max(...ps.map((x) => x.max)) : null;
+              const fmt = (n: number) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(n < 1 ? 3 : 2)}`;
+              return (
+                <li key={m.id} className="flex items-center justify-between gap-3">
+                  <label htmlFor={`price-${m.id}`} className="min-w-0 text-sm">
+                    {m.label}
+                    <span className="block text-xs text-slate-500">
+                      {lo !== null && hi !== null ? `Higgsfield: ${lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`} ${m.priceUnit === 'second' ? 'per second' : 'per image'}` : 'No list price known'}
+                    </span>
+                  </label>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <span className="text-slate-500">$</span>
+                    <Input id={`price-${m.id}`} className="w-24" type="number" min={0} step="0.001" placeholder={lo !== null ? String(lo) : '—'} value={prices[m.id] ?? ''} onChange={(e) => setPrices((p) => ({ ...p, [m.id]: e.target.value }))} />
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
-        <Button className="mt-4" variant="primary" loading={busy === 'prices'} onClick={savePrices}>Save prices</Button>
+        <Button className="mt-4" variant="primary" loading={busy === 'prices'} onClick={savePrices}>Save overrides</Button>
       </Card>
     </div>
   );

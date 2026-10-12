@@ -5,7 +5,7 @@ import { placeholderImage } from '../lib/placeholder';
 import { getHfConfig, getStatus, simStatus, simSubmit, submit, TERMINAL, type HfConfig } from './higgsfield';
 import type { Work } from './jobs';
 import { getSetting, putSetting } from './settings';
-import { buildRequest, getStudioModel, outputsPerRequest, pickMode, resolveMedia, resolveSettings, type MediaRole } from './studioCatalog';
+import { billedSeconds, buildRequest, getStudioModel, LIST_PRICES, outputsPerRequest, pickMode, resolveMedia, resolveSettings, unitPrice, type MediaRole } from './studioCatalog';
 import { recordUsage } from './usage';
 
 export type Prices = Record<string, number | null>;
@@ -103,7 +103,7 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
   if (pending.length === 0) throw new Error(failures[0] ?? 'Nothing was submitted');
   await log('info', `Submitted ${pending.length} request${pending.length > 1 ? 's' : ''} to ${model.label} (${mode.label})`);
 
-  const price = (await getPrices(orgId))[model.id] ?? null;
+  const unit = unitPrice(mode, settings, (await getPrices(orgId))[model.id] ?? null);
   const assets: GeneratedAsset[] = [];
   const title = prompt.replace(/\s+/g, ' ').slice(0, 120) || `${model.label} ${mode.label}`;
   const deadline = Date.now() + config.studioDeadlineMs;
@@ -181,10 +181,14 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
 
   if (assets.length === 0) throw new Error(failures.join('; ') || 'No media was produced');
 
-  // Cost = price x outputs, and for per-second models x the requested duration (when the mode has one).
-  const seconds = model.priceUnit === 'second' && typeof settings.duration === 'number' ? settings.duration : 1;
-  const costUsd = (price ?? 0) * seconds * assets.length;
-  if (price === null) await log('info', `No price set for ${model.label}, so this run is recorded at $0. Set one in Settings → Higgsfield.`);
+  // Cost = unit price x outputs, and for per-second models x the billed seconds (the duration setting).
+  const seconds = billedSeconds(model, mode, settings);
+  const costUsd = (unit?.amount ?? 0) * seconds * assets.length;
+  if (!unit) await log('info', `No price known for ${model.label}, so this run is recorded at $0. Set one in Settings → Higgsfield.`);
+  else if (unit.basis === 'list') {
+    const ends = LIST_PRICES[mode.path]?.promoEnds;
+    await log('info', `Estimated cost $${costUsd.toFixed(4)} from Higgsfield's list price ($${unit.amount}/${model.priceUnit === 'second' ? 's' : 'image'}${unit.precision === 'from' ? ', low end of range' : ''}${ends ? `, promotional rate until ${ends}` : ''})`);
+  }
   await recordUsage({ orgId, runId, provider: 'higgsfield', model: model.id, workflowId: p.workflowId ?? null, units: assets.length, costUsd, simulated });
   if (failures.length) await log('warn', `${failures.length} of ${pending.length} request(s) did not produce media`);
   return { assets, failures, costUsd, simulated };

@@ -158,10 +158,21 @@ export interface MediaInput {
   array: boolean;
 }
 
+export interface ListPrice {
+  unit: 'image' | 'second';
+  min: number;
+  max: number;
+  byResolution?: Record<string, number>;
+  promoEnds?: string;
+  assumedSeconds?: number;
+}
+
 export interface StudioMode {
   id: string;
   label: string;
   path: string;
+  /** Higgsfield's published price for this mode (a snapshot), or null if unknown. */
+  price: ListPrice | null;
   promptRequired?: boolean;
   params: Record<string, ParamSpec>;
   media: MediaInput[];
@@ -183,6 +194,7 @@ export interface StudioCatalog {
   connected: boolean;
   baseUrlSet: boolean;
   soulIdPriceUsd: number;
+  pricesAsOf: string;
   models: StudioModel[];
 }
 

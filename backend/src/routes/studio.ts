@@ -5,7 +5,7 @@ import { placeholderImage } from '../lib/placeholder';
 import { createCharacter, getBaseUrl, getCharacter, getHfConfig, HiggsfieldError, listCharacters, uploadFile, UPLOAD_TYPES } from '../services/higgsfield';
 import { createRun, generationQueue } from '../services/jobs';
 import { getPrices, prepareGeneration, studioWork } from '../services/studio';
-import { publicModel, STUDIO_MODELS, type MediaRole } from '../services/studioCatalog';
+import { PRICES_AS_OF, publicModel, STUDIO_MODELS, type MediaRole } from '../services/studioCatalog';
 import { getDb } from '../ctx';
 import { recordUsage } from '../services/usage';
 
@@ -24,6 +24,7 @@ studio.get(
       connected: cfg !== null,
       baseUrlSet: !!base,
       soulIdPriceUsd: SOUL_ID_PRICE_USD,
+      pricesAsOf: PRICES_AS_OF,
       models: STUDIO_MODELS.map((m) => publicModel(m, prices[m.id] ?? null)),
     });
   }),

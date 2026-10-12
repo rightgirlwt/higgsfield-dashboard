@@ -485,13 +485,102 @@ const VIDEO_MODELS: StudioModel[] = [
 
 export const STUDIO_MODELS: StudioModel[] = [...IMAGE_MODELS, ...VIDEO_MODELS];
 
+// ---- Higgsfield list prices ---------------------------------------------------------------------
+/**
+ * Prices published on open.higgsfield.ai (read 2026-10-12, as shown to a signed-in account). The platform
+ * API has no price/estimate endpoint, so these are a snapshot: they change with promotions and resolution.
+ * `min`/`max` span the model's range; `byResolution` is exact where Higgsfield states per-resolution rates.
+ * `promoEnds`: most video models carry a promotional rate (about 15% off) until that date, after which the
+ * standard (higher) price applies. Treat all figures as estimates; admin-set prices override them.
+ */
+export interface ListPrice {
+  unit: 'image' | 'second';
+  min: number;
+  max: number;
+  byResolution?: Record<string, number>;
+  promoEnds?: string;
+  /** Used when the mode has no `duration` setting but is billed per second (e.g. by the input video's length). */
+  assumedSeconds?: number;
+}
+export const PRICES_AS_OF = '2026-10-12';
+
+const img$ = (min: number, max = min, byResolution?: Record<string, number>): ListPrice => ({ unit: 'image', min, max, byResolution });
+const vid$ = (min: number, max = min, o: { byResolution?: Record<string, number>; promoEnds?: string; assumedSeconds?: number } = {}): ListPrice => ({ unit: 'second', min, max, ...o });
+const PROMO = '2026-10-18';
+const SOUL_PRICE = img$(0.0032, 0.0057, { '720p': 0.0032, '1080p': 0.0057 });
+const QWEN_PRICE = img$(0.04, 0.075, { '1k': 0.04, '2k': 0.075 });
+
+/** Keyed by mode path. */
+export const LIST_PRICES: Record<string, ListPrice> = {
+  'higgsfield-ai/soul/v2/standard': SOUL_PRICE,
+  'higgsfield-ai/soul/v2/image-to-image': SOUL_PRICE,
+  'xai/grok-imagine-image-2.0': img$(0.04, 0.08),
+  'ideogram/v4.0': img$(0.03),
+  'recraft/v4.1/text-to-image': img$(0.035),
+  'alibaba/qwen-image-3/text-to-image': QWEN_PRICE,
+  'alibaba/qwen-image-3/edit': QWEN_PRICE,
+  'z-image/turbo': img$(0.015),
+  'kling-video/v3.0/std/text-to-video': vid$(0.0714, 0.0714, { promoEnds: PROMO }),
+  'kling-video/v3.0/std/image-to-video': vid$(0.0714, 0.1071, { promoEnds: PROMO }),
+  'kling-video/v3.0/pro/text-to-video': vid$(0.0952, 0.1428, { promoEnds: PROMO }),
+  'kling-video/v3.0/pro/image-to-video': vid$(0.0952, 0.1428, { promoEnds: PROMO }),
+  'kling-video/v3.0/4k/text-to-video': vid$(0.357, 0.357, { promoEnds: PROMO }),
+  'kling-video/v3.0/4k/image-to-video': vid$(0.357, 0.357, { promoEnds: PROMO }),
+  'kling-video/v3.0-turbo/text-to-video': vid$(0.0952, 0.119, { byResolution: { '720p': 0.0952, '1080p': 0.119 }, promoEnds: PROMO }),
+  'kling-video/v3.0-turbo/image-to-video': vid$(0.0952, 0.119, { byResolution: { '720p': 0.0952, '1080p': 0.119 }, promoEnds: PROMO }),
+  'kling-video/v3/motion-control/std': vid$(0.1071, 0.1071, { promoEnds: PROMO, assumedSeconds: 5 }),
+  'kling-video/v3/motion-control/pro': vid$(0.1428, 0.1428, { promoEnds: PROMO, assumedSeconds: 5 }),
+  'bytedance/seedance-2.5/text-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO }),
+  'bytedance/seedance-2.5/image-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO }),
+  'bytedance/seedance-2.5/reference-to-video': vid$(0.1728, 0.9553, { promoEnds: PROMO }),
+  'bytedance/seedance-2.0/text-to-video': vid$(0.1196, 1.322, { promoEnds: PROMO }),
+  'bytedance/seedance-2.0/image-to-video': vid$(0.1196, 1.322, { promoEnds: PROMO }),
+  'bytedance/seedance-2.0/reference-to-video': vid$(0.1435, 1.5864, { promoEnds: PROMO }),
+  'alibaba/wan-3.0/text-to-video': vid$(0.0425, 0.17, { promoEnds: PROMO }),
+  'alibaba/wan-3.0/image-to-video': vid$(0.0425, 0.17, { promoEnds: PROMO }),
+  'alibaba/wan-3.0/reference-to-video': vid$(0.0425, 0.17, { promoEnds: PROMO }),
+  'minimax/h3/text-to-video': vid$(0.1105, 0.1105, { promoEnds: PROMO }),
+  'minimax/h3/image-to-video': vid$(0.1105, 0.1105, { promoEnds: PROMO }),
+  'minimax/h3/reference-to-video': vid$(0.1105, 0.1105, { promoEnds: PROMO }),
+  'higgsfield/genjutsu/motion-transfer/v1.0': vid$(0.2703, 1.3872, { promoEnds: PROMO, assumedSeconds: 5 }),
+  'lightricks/ltx-2.5/text-to-video/fast': vid$(0.09, 0.3, { byResolution: { '720p': 0.09, '1080p': 0.13, '2k': 0.19, '4k': 0.3 } }),
+  'lightricks/ltx-2.5/image-to-video/fast': vid$(0.09, 0.3, { byResolution: { '720p': 0.09, '1080p': 0.13, '2k': 0.19, '4k': 0.3 } }),
+  'lightricks/ltx-2.5/text-to-video/pro': vid$(0.12, 0.17, { byResolution: { '720p': 0.12, '1080p': 0.17 } }),
+  'lightricks/ltx-2.5/image-to-video/pro': vid$(0.12, 0.17, { byResolution: { '720p': 0.12, '1080p': 0.17 } }),
+};
+
+export interface UnitPrice {
+  /** USD per output image, or per second of video. */
+  amount: number;
+  /** `exact` when a per-resolution rate applied; `from` when it is the low end of a range. */
+  precision: 'exact' | 'from';
+  basis: 'admin' | 'list';
+}
+
+/** The price to use for one output: admin override first, then Higgsfield's list price for this mode and resolution. */
+export function unitPrice(mode: StudioMode, settings: Record<string, any>, adminPrice: number | null): UnitPrice | null {
+  if (adminPrice !== null) return { amount: adminPrice, precision: 'exact', basis: 'admin' };
+  const lp = LIST_PRICES[mode.path];
+  if (!lp) return null;
+  const byRes = typeof settings.resolution === 'string' ? lp.byResolution?.[settings.resolution] : undefined;
+  if (byRes !== undefined) return { amount: byRes, precision: 'exact', basis: 'list' };
+  return { amount: lp.min, precision: lp.min === lp.max ? 'exact' : 'from', basis: 'list' };
+}
+
+/** Seconds billed per output for per-second models: the duration setting, else an assumption for input-length-billed modes. */
+export function billedSeconds(model: StudioModel, mode: StudioMode, settings: Record<string, any>): number {
+  if (model.priceUnit !== 'second') return 1;
+  if (typeof settings.duration === 'number') return settings.duration;
+  return LIST_PRICES[mode.path]?.assumedSeconds ?? 1;
+}
+
 export function getStudioModel(id: string): StudioModel | undefined {
   return STUDIO_MODELS.find((m) => m.id === id);
 }
 
-/** The catalog is pure data, so it can be sent to the browser as-is (plus the admin-set price). */
+/** The catalog is pure data, so it can be sent to the browser as-is (plus the admin override and each mode's list price). */
 export function publicModel(m: StudioModel, price: number | null) {
-  return { ...m, priceUsd: price };
+  return { ...m, priceUsd: price, modes: m.modes.map((md) => ({ ...md, price: LIST_PRICES[md.path] ?? null })) };
 }
 
 // ---- mode selection, validation, request building ---------------------------------------------
