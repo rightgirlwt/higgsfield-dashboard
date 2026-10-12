@@ -67,7 +67,7 @@ export function GenerateDialog({
                       <td className="px-3 py-2"><div className="font-medium">{i.title}</div>{i.group && <div className="text-xs text-slate-500">{i.group}</div>}</td>
                       <td className="px-3 py-2 text-slate-400">
                         {e?.ok ? (
-                          <>{e.model} · {e.mode}<div className="text-xs text-slate-500">{e.outputs} output{e.outputs > 1 ? 's' : ''}{e.seconds > 1 ? ` × ${e.seconds}s` : ''}{e.precision === 'from' ? ' · low end of range' : ''}{e.promoEnds ? ` · promo until ${e.promoEnds}` : ''}</div></>
+                          <>{e.model} · {e.mode}<div className="text-xs text-slate-500">{e.outputs} output{e.outputs > 1 ? 's' : ''}{e.seconds > 1 ? ` × ${e.seconds}s` : ''}{e.basis !== 'live' && e.precision === 'from' ? ' · low end of range' : ''}{e.basis === 'live' ? ' · Higgsfield’s quote' : ''}{e.promoEnds ? ` · promo until ${e.promoEnds}` : ''}</div></>
                         ) : (
                           <span className="text-rose-300">{e && !e.ok ? e.reason : '…'}</span>
                         )}
@@ -96,7 +96,7 @@ export function GenerateDialog({
           {est.unpriced.length > 0 && <p className="flex gap-2 text-xs text-amber-300"><AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> {est.unpriced.length} item(s) have no known price, so they’re counted as $0. Set a price in Settings → Higgsfield to track them.</p>}
           {over && <p role="alert" className="flex gap-2 text-sm text-rose-300"><AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> This batch would go over the project budget. Raise the budget or choose fewer items.</p>}
           {blocked && <p role="alert" className="flex gap-2 text-sm text-rose-300"><AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> Some items can’t be generated yet. Open them and fix what’s listed above.</p>}
-          <p className="text-xs text-slate-500">Prices are Higgsfield’s list prices{pricesAsOf ? ` as of ${pricesAsOf}` : ''} (or your overrides), so the final charge can differ slightly.</p>
+          <p className="text-xs text-slate-500">{est.estimates.length > 0 && est.estimates.every((e) => e.ok && e.basis === 'live') ? 'Prices are Higgsfield’s own quote for these exact settings.' : `Where Higgsfield doesn’t quote a single number, prices come from its list prices${pricesAsOf ? ` as of ${pricesAsOf}` : ''} (or your overrides).`} The final charge can differ slightly; Higgsfield’s billing page is the final word.</p>
 
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>Not yet</Button>

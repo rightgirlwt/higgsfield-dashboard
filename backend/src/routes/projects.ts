@@ -192,7 +192,7 @@ projects.post(
     const { ids } = z.object({ ids: z.array(z.string().uuid()).max(500).optional() }).parse(req.body ?? {});
     const all = await loadItems(org, project.id);
     const chosen = ids ? all.filter((i) => ids.includes(i.id)) : all.filter((i) => i.status !== 'approved' && i.model_id);
-    const est = await estimateItems(org, chosen);
+    const est = await estimateItems(org, chosen, { live: true });
     const spend = await projectSpend(org, project.id, all);
     res.json({ ...est, budgetUsd: project.budget_usd, spend, budgetLeftUsd: project.budget_usd > 0 ? Math.max(0, project.budget_usd - spend.totalUsd) : null });
   }),

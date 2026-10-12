@@ -2,6 +2,7 @@ import { CheckCircle2, Download, KeyRound, Lock, Trash2, UserPlus } from 'lucide
 import { useEffect, useState } from 'react';
 import { useAuth, useCan } from '../auth/context';
 import { Badge, Button, Card, CardHeader, ErrorState, Field, Input, PageHeader, Select, Skeleton, Tabs } from '../components/ui';
+import { PriceCheckCard } from '../components/PriceCheckCard';
 import { api, errorMessage } from '../lib/api';
 import { price, timeAgo } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
@@ -210,7 +211,7 @@ function HiggsfieldTab({ s, onSaved }: { s: SettingsData; onSaved: () => void })
       <Card className="p-5">
         <CardHeader eyebrow="Spend tracking" title="Prices (USD)" />
         <p className="mb-4 text-sm text-slate-400">
-          Costs are <strong>pulled from Higgsfield’s published prices</strong> (snapshot taken {catalog.data?.pricesAsOf ?? '…'}), matched to the model, mode and resolution, so you don’t need to enter anything. Most video models are on a promotional rate that ends <strong>October 18</strong>, after which prices go up, so treat them as estimates. Fill in a box only to <strong>override</strong> a model with your own flat price (per image, or per second of video). Higgsfield’s own billing page is the final word on what you were charged.
+          Cost dialogs and spend tracking ask <strong>Higgsfield for its own price</strong> for your exact settings, so you don’t need to enter anything. The figures below are a saved snapshot ({catalog.data?.pricesAsOf ?? '…'}) used only when Higgsfield can’t give a single number (some models are priced by length or tokens). Fill in a box only to <strong>override</strong> a model with your own flat price (per image, or per second of video). Higgsfield’s billing page is the final word on what you were charged.
         </p>
         {!catalog.data ? <Skeleton className="h-40" /> : (
           <ul className="space-y-2">
@@ -238,6 +239,8 @@ function HiggsfieldTab({ s, onSaved }: { s: SettingsData; onSaved: () => void })
         )}
         <Button className="mt-4" variant="primary" loading={busy === 'prices'} onClick={savePrices}>Save overrides</Button>
       </Card>
+
+      <PriceCheckCard last={s.higgsfield.priceCheck} promoEnds={s.higgsfield.promoEnds} onChecked={onSaved} />
     </div>
   );
 }

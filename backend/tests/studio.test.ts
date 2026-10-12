@@ -157,6 +157,10 @@ const fake = {
   script: 'video' as 'video' | 'nsfw' | 'reject' | 'image2',
   statusCalls: new Map<string, number>(),
   uploads: [] as { bytes: number; headers: http.IncomingHttpHeaders }[],
+  /** Price estimate requests (kept apart from generation requests). `estimateUsd: null` = the endpoint is unavailable (404). */
+  estimates: [] as { url: string; body: any }[],
+  estimateUsd: null as number | null,
+  estimateMode: 'price' as 'price' | 'description',
 };
 
 beforeAll(async () => {
@@ -182,6 +186,12 @@ beforeAll(async () => {
         fake.uploads.push({ bytes: buf.length, headers: req.headers });
         res.writeHead(200).end();
         return;
+      }
+      if (req.url!.startsWith('/estimate/')) {
+        fake.estimates.push({ url: req.url!, body });
+        if (fake.estimateUsd === null) return send(404, { detail: 'no estimate' });
+        if (fake.estimateMode === 'description') return send(200, { type: 'description', pricing_description: 'Per-second pricing by resolution' });
+        return send(200, { credits: String(fake.estimateUsd * 16), usd: String(fake.estimateUsd) });
       }
       fake.seen.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, idem: req.headers['idempotency-key'] as string | undefined, body });
       const m = /^\/requests\/([^/]+)\/status$/.exec(req.url!);

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { getDb } from '../ctx';
 import { badRequest, conflict, HttpError, notFound } from '../lib/errors';
 import { createRun, generationQueue, type RunDto, type Work } from './jobs';
+import { livePrice, mapLimit } from './livePrice';
 import { getPrices, prepareGeneration, runStudioGeneration, type GenerateParams } from './studio';
 import { billedSeconds, getStudioModel, LIST_PRICES, outputsPerRequest, unitPrice, type MediaRole } from './studioCatalog';
 import { PROJECT_TYPES, type ProjectType } from './projectTypes';
@@ -231,7 +232,7 @@ export async function updateItem(orgId: string, projectId: string, itemId: strin
 
 // ---- cost ----------------------------------------------------------------------------------------------
 export type Estimate =
-  | { itemId: string; ok: true; costUsd: number | null; outputs: number; seconds: number; unitUsd: number | null; basis: 'admin' | 'list' | null; precision: 'exact' | 'from' | null; model: string; mode: string; promoEnds: string | null }
+  | { itemId: string; ok: true; costUsd: number | null; outputs: number; seconds: number; unitUsd: number | null; basis: 'admin' | 'list' | 'live' | null; precision: 'exact' | 'from' | null; model: string; mode: string; promoEnds: string | null }
   | { itemId: string; ok: false; reason: string };
 
 export function estimateItem(item: ItemRow, prices: Record<string, number | null>): Estimate {
@@ -250,9 +251,29 @@ export function estimateItem(item: ItemRow, prices: Record<string, number | null
   }
 }
 
-export async function estimateItems(orgId: string, items: ItemRow[]) {
+/**
+ * With `live`, each priced item is checked against Higgsfield's own estimate for exactly these settings (price depends on things like
+ * sound, resolution and duration). It falls back to the snapshot when that isn't available, and an admin-set price always wins.
+ */
+export async function estimateItems(orgId: string, items: ItemRow[], opts: { live?: boolean } = {}) {
   const prices = await getPrices(orgId);
   const estimates = items.map((i) => estimateItem(i, prices));
+  if (opts.live) {
+    await mapLimit(items.map((_, n) => n), 4, async (n) => {
+      const e = estimates[n];
+      const item = items[n];
+      if (!e.ok || prices[item.model_id] != null) return;
+      try {
+        const p = prepareGeneration(configFor({ prompt: item.prompt, modelId: item.model_id, mode: item.mode, settings: item.settings, media: item.media, meta: item.meta }));
+        const usd = await livePrice(orgId, p.path, p.body);
+        if (usd === null) return;
+        const cost = usd * p.requests;
+        estimates[n] = { ...e, costUsd: cost, unitUsd: e.seconds * e.outputs > 0 ? cost / (e.seconds * e.outputs) : null, basis: 'live', precision: 'exact' };
+      } catch {
+        /* keep the snapshot estimate */
+      }
+    });
+  }
   const total = estimates.reduce((s, e) => s + (e.ok ? (e.costUsd ?? 0) : 0), 0);
   return {
     estimates,
@@ -412,7 +433,7 @@ export async function startGeneration(
   const busy = chosen.filter((i) => i.status === 'generating');
   if (busy.length) throw conflict(`Already generating: ${busy.map((i) => `"${i.title}"`).join(', ')}`);
 
-  const est = await estimateItems(orgId, chosen);
+  const est = await estimateItems(orgId, chosen, { live: true });
   if (est.blocked.length) {
     const first = est.blocked[0];
     const item = chosen.find((i) => i.id === first.itemId)!;

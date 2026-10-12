@@ -119,6 +119,7 @@ Connect with `io(origin, { auth: { token } })` (same token as REST). Server → 
 | `job:update` | Run without `input`/`output` – on queue, start, finish |
 | `log:new` | `{id, runId, level, message, nodeId, ts, kind, refId, refName}` |
 | `alert:new` | `{id, kind, severity, message, …}` |
+| `usage:new` | `{provider, costUsd, simulated}`: sent whenever spend is recorded |
 
 ## Studio (Higgsfield generation)
 
@@ -131,6 +132,9 @@ Connect with `io(origin, { auth: { token } })` (same token as REST). Server → 
 | `POST /studio/characters` | user | `{name, imageUrls[1-30], confirmedCost:true}` trains a Soul ID (billed by Higgsfield, about $2.50; recorded as usage). Refused without `confirmedCost` |
 | `GET /studio/characters/:id` | any | Status of one character |
 | `PUT /settings/higgsfield` | admin | `{baseUrl}`; for higgsfield.ai hosts any pasted path is trimmed to the host; https required in production; no credentials in the URL |
+| `POST /settings/higgsfield/check-prices` | admin | Asks Higgsfield's estimate endpoint for every model/mode at default settings and compares with the snapshot: `{checkedAt, rows:[{modelId,modeId,snapshotUsd,liveUsd,diffPct,status:match\|changed\|info\|error,description?,note?}], counts}`. `info` = Higgsfield priced it in words. Stored and returned by `GET /settings` as `higgsfield.priceCheck`. Free; nothing is generated |
+| `PUT /settings/credits/:provider`, `DELETE …` | admin | `provider` = `claude`\|`higgsfield`; `{balanceUsd}` is the balance read from that provider's console |
+| `GET /dashboard/credits` | any | `[{provider, set, startingUsd, asOf, usedSinceUsd, lifetimeUsedUsd, remainingUsd, low}]`: entered balance minus real (non-demo) spend recorded since |
 | `PUT /settings/studio-prices` | admin | `{prices:{modelId: usd\|null}}`, USD per generated image (image models) or per second of video (video models) |
 
 `GET /settings` also returns `higgsfield:{baseUrl, baseUrlFromEnv, prices}`; `GET /settings/secrets` includes a safe shape check for the Higgsfield key (lengths and the first 8 characters of the public key ID, never the secret). Runs of `kind=generation` appear in `GET /runs`, Monitoring and the job table. Workflow definitions may contain `generate` nodes (`data: {model, prompt, startUrl?, endUrl?, count?}`); a start/end URL switches the node to the model's image mode.

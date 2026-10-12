@@ -2,12 +2,13 @@ import { ArrowDownRight, ArrowUpRight, Download, FileText, FlaskConical, Play } 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CreditsPanel } from '../components/CreditsPanel';
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, PageHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { ms, num, pct, timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
 import { cssColor } from '../lib/theme';
-import type { BreakdownRow, Run, SpendPoint, Summary } from '../lib/types';
+import type { BreakdownRow, CreditStatus, Run, SpendPoint, Summary } from '../lib/types';
 import { useRealtime } from '../state/Realtime';
 import { useToast } from '../state/Toast';
 
@@ -48,21 +49,23 @@ const AXIS = cssColor('slate-400');
 export default function Overview() {
   useDocumentTitle('Overview');
   const toast = useToast();
-  const { runTick, snapshot } = useRealtime();
+  const { runTick, usageTick, snapshot, connected } = useRealtime();
   const [range, setRange] = useState<Range>('30d');
   const [by, setBy] = useState<By>('model');
   const summary = useApi<Summary>(`/dashboard/summary?range=${range}`);
   const spend = useApi<SpendPoint[]>(`/dashboard/spend?range=${range}`);
   const breakdown = useApi<BreakdownRow[]>(`/dashboard/breakdown?by=${by}&range=${range}`);
   const recent = useApi<Run[]>('/dashboard/recent-runs');
+  const credits = useApi<CreditStatus[]>('/dashboard/credits');
   const [busy, setBusy] = useState<string | null>(null);
 
   // Refresh headline numbers when runs complete in real time.
-  const reloadAll = [summary.reload, spend.reload, breakdown.reload, recent.reload];
+  // ...and the instant any spend is recorded (a render finishing, a chat reply, a workflow step), not just when a run ends.
+  const reloadAll = [summary.reload, spend.reload, breakdown.reload, recent.reload, credits.reload];
   useEffect(() => {
-    if (runTick > 0) reloadAll.forEach((r) => r());
+    if (runTick > 0 || usageTick > 0) reloadAll.forEach((r) => r());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runTick]);
+  }, [runTick, usageTick]);
 
   const download = async (path: string, name: string, key: string) => {
     setBusy(key);
@@ -88,6 +91,7 @@ export default function Overview() {
         title="Higgsfield Studio"
         actions={
           <>
+            <Badge tone={connected ? 'emerald' : 'amber'}><span className={`h-1.5 w-1.5 rounded-full ${connected ? 'animate-pulse bg-emerald-500' : 'bg-amber-500'}`} aria-hidden />{connected ? 'Live' : 'Reconnecting'}</Badge>
             <Tabs label="Date range" value={range} onChange={setRange} tabs={[{ id: '7d', label: '7 days' }, { id: '30d', label: '30 days' }, { id: '90d', label: '90 days' }]} />
             <Button loading={busy === 'csv'} onClick={() => download(`/export/usage.csv?range=${range}`, 'usage.csv', 'csv')}>
               <Download className="h-4 w-4" aria-hidden /> CSV
@@ -139,6 +143,8 @@ export default function Overview() {
           )}
         </section>
       )}
+
+      <CreditsPanel credits={credits.data} onChanged={credits.reload} />
 
       <section className="mt-6 grid gap-6 xl:grid-cols-[2fr_1fr]">
         <Card className="p-5">

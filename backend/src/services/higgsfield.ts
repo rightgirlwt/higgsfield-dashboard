@@ -104,6 +104,28 @@ export async function submit(cfg: HfConfig, modelPath: string, body: Record<stri
   return { requestId: r.request_id, status: typeof r.status === 'string' ? r.status : 'queued' };
 }
 
+/**
+ * Higgsfield's own price for a request with these parameters (docs: "Billing and retention", POST /estimate/{model-path}).
+ * Returns credits and USD for the authenticated account, and does not generate or charge anything.
+ */
+export type HfEstimate = { kind: 'price'; credits: number; usd: number } | { kind: 'description'; text: string };
+
+/**
+ * Models with simple pricing return {credits, usd}. Variable-priced ones (token-metered, per second by resolution, billed by input
+ * video length) return a written description instead, which can't be turned into a number without guessing.
+ */
+export async function estimate(cfg: HfConfig, modelPath: string, body: Record<string, unknown>): Promise<HfEstimate> {
+  if (!MODEL_PATH.test(modelPath) || modelPath.includes('..')) throw new HiggsfieldError(400, 'Invalid model path');
+  const r = await call(cfg, 'POST', `/estimate/${modelPath}`, body);
+  const usd = Number(r?.usd);
+  if (Number.isFinite(usd) && usd >= 0 && r?.usd !== null && r?.usd !== undefined) {
+    const credits = Number(r?.credits);
+    return { kind: 'price', credits: Number.isFinite(credits) ? credits : 0, usd };
+  }
+  if (typeof r?.pricing_description === 'string' && r.pricing_description.trim()) return { kind: 'description', text: r.pricing_description.trim().slice(0, 1200) };
+  throw new HiggsfieldError(502, 'Higgsfield returned an estimate with no usable price');
+}
+
 export async function getStatus(cfg: HfConfig, requestId: string): Promise<HfStatus> {
   if (!requestId) throw new HiggsfieldError(400, 'Missing request id');
   const r = await call(cfg, 'GET', `/requests/${encodeURIComponent(requestId)}/status`);

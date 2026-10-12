@@ -570,7 +570,9 @@ export function unitPrice(mode: StudioMode, settings: Record<string, any>, admin
 /** Seconds billed per output for per-second models: the duration setting, else an assumption for input-length-billed modes. */
 export function billedSeconds(model: StudioModel, mode: StudioMode, settings: Record<string, any>): number {
   if (model.priceUnit !== 'second') return 1;
-  if (typeof settings.duration === 'number') return settings.duration;
+  // Duration is a number for slider settings but text for dropdown ones ("6"), and both must be billed by their length.
+  const d = typeof settings.duration === 'string' && settings.duration.trim() !== '' ? Number(settings.duration) : settings.duration;
+  if (typeof d === 'number' && Number.isFinite(d) && d > 0) return d;
   return LIST_PRICES[mode.path]?.assumedSeconds ?? 1;
 }
 

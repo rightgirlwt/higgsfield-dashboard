@@ -2,10 +2,12 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth';
 import { getDb } from '../ctx';
-import { badRequest, conflict, forbidden, notFound, wrap } from '../lib/errors';
+import { badRequest, conflict, forbidden, HttpError, notFound, wrap } from '../lib/errors';
 import { config } from '../config';
 import { getModel, MODELS } from '../lib/pricing';
-import { getBaseUrl, normalizeBaseUrl } from '../services/higgsfield';
+import { clearBalance, CREDIT_PROVIDERS, setBalance } from '../services/credits';
+import { getBaseUrl, HiggsfieldError, normalizeBaseUrl } from '../services/higgsfield';
+import { checkPrices, lastPriceCheck, promoEndDate } from '../services/priceCheck';
 import { getPrices, setPrices } from '../services/studio';
 import { getStudioModel } from '../services/studioCatalog';
 import { deleteSecret, getSecret, HIGGSFIELD_KEY_RE, listSecretStatus, SECRET_NAMES, setSecret, type SecretName } from '../services/secrets';
@@ -33,6 +35,8 @@ settings.get(
         baseUrl: await getBaseUrl(org),
         baseUrlFromEnv: !(await getSetting<{ baseUrl: string }>(org, 'higgsfield', { baseUrl: '' })).baseUrl && !!config.higgsfieldApiBase,
         prices: await getPrices(org),
+        priceCheck: await lastPriceCheck(org),
+        promoEnds: promoEndDate(),
       },
     });
   }),
@@ -53,6 +57,41 @@ settings.put(
     }
     await putSetting(req.user!.orgId, 'higgsfield', { baseUrl: clean });
     res.json({ baseUrl: clean });
+  }),
+);
+
+/** Asks Higgsfield for the real price of every model and compares it with the snapshot. Free: estimates generate and charge nothing. */
+settings.post(
+  '/higgsfield/check-prices',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    try {
+      res.json(await checkPrices(req.user!.orgId));
+    } catch (e) {
+      if (e instanceof HiggsfieldError) throw new HttpError(502, e.message, 'upstream');
+      throw e;
+    }
+  }),
+);
+
+/** Balance you read off the provider's console; the dashboard subtracts tracked spend from it. */
+settings.put(
+  '/credits/:provider',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    const provider = z.enum(CREDIT_PROVIDERS).parse(req.params.provider);
+    const { balanceUsd } = z.object({ balanceUsd: z.number().min(0).max(10_000_000) }).parse(req.body);
+    await setBalance(req.user!.orgId, provider, balanceUsd);
+    res.json({ ok: true });
+  }),
+);
+
+settings.delete(
+  '/credits/:provider',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    await clearBalance(req.user!.orgId, z.enum(CREDIT_PROVIDERS).parse(req.params.provider));
+    res.status(204).end();
   }),
 );
 

@@ -2,6 +2,7 @@ import { config } from '../config';
 import { getDb } from '../ctx';
 import { badRequest } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
+import { livePrice } from './livePrice';
 import { getHfConfig, getStatus, simStatus, simSubmit, submit, TERMINAL, type HfConfig } from './higgsfield';
 import type { Work } from './jobs';
 import { getSetting, putSetting } from './settings';
@@ -105,7 +106,11 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
   if (pending.length === 0) throw new Error(failures[0] ?? 'Nothing was submitted');
   await log('info', `Submitted ${pending.length} request${pending.length > 1 ? 's' : ''} to ${model.label} (${mode.label})`);
 
-  const unit = unitPrice(mode, settings, (await getPrices(orgId))[model.id] ?? null);
+  const adminPrice = (await getPrices(orgId))[model.id] ?? null;
+  const unit = unitPrice(mode, settings, adminPrice);
+  // Price of one request as Higgsfield itself quotes it for these exact settings (null: use the snapshot).
+  const livePerRequest = adminPrice === null && !simulated ? await livePrice(orgId, path, body) : null;
+  let succeeded = 0;
   const assets: GeneratedAsset[] = [];
   const title = prompt.replace(/\s+/g, ' ').slice(0, 120) || `${model.label} ${mode.label}`;
   const deadline = Date.now() + config.studioDeadlineMs;
@@ -134,6 +139,7 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
       );
       assets.push({ id: rows[0].id, url: u.url, thumbUrl: thumb, type: u.type });
     }
+    succeeded++;
     await log('info', `Request ${r.id.slice(0, 8)} completed`);
   };
 
@@ -185,8 +191,9 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
 
   // Cost = unit price x outputs, and for per-second models x the billed seconds (the duration setting).
   const seconds = billedSeconds(model, mode, settings);
-  const costUsd = (unit?.amount ?? 0) * seconds * assets.length;
-  if (!unit) await log('info', `No price known for ${model.label}, so this run is recorded at $0. Set one in Settings → Higgsfield.`);
+  const costUsd = livePerRequest !== null ? livePerRequest * succeeded : (unit?.amount ?? 0) * seconds * assets.length;
+  if (livePerRequest !== null) await log('info', `Cost $${costUsd.toFixed(4)} from Higgsfield's own estimate ($${livePerRequest.toFixed(4)} per request)`);
+  else if (!unit) await log('info', `No price known for ${model.label}, so this run is recorded at $0. Set one in Settings → Higgsfield.`);
   else if (unit.basis === 'list') {
     const ends = LIST_PRICES[mode.path]?.promoEnds;
     await log('info', `Estimated cost $${costUsd.toFixed(4)} from Higgsfield's list price ($${unit.amount}/${model.priceUnit === 'second' ? 's' : 'image'}${unit.precision === 'from' ? ', low end of range' : ''}${ends ? `, promotional rate until ${ends}` : ''})`);

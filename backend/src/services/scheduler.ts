@@ -1,6 +1,7 @@
 import { getDb } from '../ctx';
 import { logger } from '../logger';
 import { createAlert } from './alerts';
+import { lastPriceCheck, promoEndDate } from './priceCheck';
 import { createRun, queue } from './jobs';
 import { estimateWorkflow, workflowWork, type WorkflowDefinition } from './workflowEngine';
 
@@ -39,11 +40,37 @@ export async function tick(now = Date.now()): Promise<number> {
   return started;
 }
 
+/**
+ * Prices are a snapshot, and most video models carry a promotional rate. Once that date has passed, raise one in-app alert per
+ * organisation (until a price check has been run since) so the person remembers to re-check them.
+ */
+export async function checkPriceFreshness(now = Date.now()): Promise<number> {
+  const promo = promoEndDate();
+  if (!promo || now < new Date(`${promo}T23:59:59Z`).getTime()) return 0;
+  const { rows } = await getDb().query<{ id: string }>('SELECT id FROM organizations');
+  let raised = 0;
+  for (const o of rows) {
+    const last = await lastPriceCheck(o.id);
+    if (last?.checkedAt && last.checkedAt.slice(0, 10) > promo) continue; // already re-checked after the promotion ended
+    const a = await createAlert(o.id, {
+      kind: 'prices_check',
+      severity: 'warning',
+      message: `Higgsfield's launch promotion ended on ${promo}, so the video prices in this dashboard may be out of date. Open Settings → Higgsfield and press “Check prices”.`,
+      period: `promo:${promo}`,
+    });
+    if (a) raised++;
+  }
+  return raised;
+}
+
 export function startScheduler(): void {
   if (timer) return;
-  timer = setInterval(() => {
+  const run = () => {
     tick().catch((e) => logger.error('scheduler tick failed', { err: String(e) }));
-  }, 60_000);
+    checkPriceFreshness().catch((e) => logger.error('price freshness check failed', { err: String(e) }));
+  };
+  setTimeout(run, 5_000).unref();
+  timer = setInterval(run, 60_000);
   timer.unref();
 }
 

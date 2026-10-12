@@ -211,7 +211,7 @@ async function runTool(ctx: ToolCtx, name: string, input: any): Promise<unknown>
       const a = estimateIds.parse(input ?? {});
       const all = await loadItems(orgId, projectId);
       const chosen = a.ids ? all.filter((i) => a.ids!.includes(i.id)) : all.filter((i) => i.status !== 'approved' && i.model_id);
-      const est = await estimateItems(orgId, chosen);
+      const est = await estimateItems(orgId, chosen, { live: true });
       const byId = new Map(est.estimates.map((e) => [e.itemId, e]));
       const spend = await projectSpend(orgId, projectId, all);
       return {
@@ -224,7 +224,7 @@ async function runTool(ctx: ToolCtx, name: string, input: any): Promise<unknown>
       const a = idsSchema.parse(input);
       const all = await loadItems(orgId, projectId);
       const chosen = all.filter((i) => a.ids.includes(i.id));
-      const est = await estimateItems(orgId, chosen);
+      const est = await estimateItems(orgId, chosen, { live: true });
       const blocked = new Set(est.blocked.map((b) => b.itemId));
       const ok = chosen.filter((i) => !blocked.has(i.id) && ['draft', 'rejected', 'review'].includes(i.status));
       if (ok.length) await getDb().query(`UPDATE project_items SET status='ready', updated_at=now() WHERE org_id=$1 AND id = ANY($2::uuid[])`, [orgId, ok.map((i) => i.id)]);

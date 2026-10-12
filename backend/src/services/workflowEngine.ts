@@ -7,7 +7,8 @@ import { createAlert } from './alerts';
 import { runPrompt } from './claude';
 import type { Work } from './jobs';
 import { getDefaults } from './settings';
-import { estimateItem, generateCard, loadItem, paramsForRun, selectCards, type ItemRow } from './projects';
+import { estimateItems, generateCard, loadItem, paramsForRun, selectCards, type ItemRow } from './projects';
+import { livePrice } from './livePrice';
 import { getPrices, prepareGeneration, runStudioGeneration } from './studio';
 import { billedSeconds, getStudioModel, outputsPerRequest, unitPrice } from './studioCatalog';
 import { runTransform, type TransformConfig } from './transform';
@@ -440,7 +441,7 @@ export async function estimateWorkflow(orgId: string, wf: WorkflowRecord): Promi
   const trigger = wf.definition.nodes.find((n) => n.type === 'trigger');
   const fromProject = trigger?.data.source === 'project' && !!wf.projectId;
 
-  const perItem = (n: WfNode, count = 1) => {
+  const perItem = async (n: WfNode, count = 1): Promise<number | null> => {
     const start = String(n.data.startUrl ?? '').trim();
     const end = String(n.data.endUrl ?? '').trim();
     // Templates can't be resolved yet, so any non-empty value stands in for a real URL when choosing the mode.
@@ -448,6 +449,11 @@ export async function estimateWorkflow(orgId: string, wf: WorkflowRecord): Promi
       modelId: n.data.model, prompt: String(n.data.prompt ?? '') || 'draft', settings: n.data.settings ?? {}, count,
       media: { ...(start ? { start: ['https://pending.invalid/a.png'] } : {}), ...(end ? { end: ['https://pending.invalid/b.png'] } : {}) },
     });
+    // Higgsfield's own quote for these exact settings wins over the snapshot (unless an admin set a flat price).
+    if (prices[p.model.id] == null) {
+      const live = await livePrice(orgId, p.path, p.body);
+      if (live !== null) return live * p.requests;
+    }
     const unit = unitPrice(p.mode, p.settings, prices[p.model.id] ?? null);
     const outputs = p.requests * outputsPerRequest(p.settings);
     return unit ? unit.amount * billedSeconds(p.model, p.mode, p.settings) * outputs : null;
@@ -461,7 +467,7 @@ export async function estimateWorkflow(orgId: string, wf: WorkflowRecord): Promi
   for (const n of wf.definition.nodes) {
     const label = String(n.data.label || n.type);
     try {
-      if (n.type === 'generate') add(n.id, label, 1, perItem(n, clampInt(n.data.count, 1, 4, 1)));
+      if (n.type === 'generate') add(n.id, label, 1, await perItem(n, clampInt(n.data.count, 1, 4, 1)));
       if (n.type === 'foreach') {
         const mode = n.data.mode ?? 'cards';
         const max = clampInt(n.data.maxItems, 1, MAX_FOREACH, 20);
@@ -471,7 +477,8 @@ export async function estimateWorkflow(orgId: string, wf: WorkflowRecord): Promi
             continue;
           }
           const cards = await selectCards(orgId, wf.projectId, { statuses: fromProject ? trigger!.data.statuses : undefined, group: fromProject ? String(trigger!.data.group ?? '') : '', limit: max });
-          const prices2 = cards.map((c) => estimateItem(c, prices));
+          const priced = await estimateItems(orgId, cards, { live: true });
+          const prices2 = priced.estimates;
           const bad = prices2.filter((e) => !e.ok);
           if (bad.length) est.problems.push(`${label}: ${bad.length} card${bad.length > 1 ? 's' : ''} can't be generated yet (${(bad[0] as { reason: string }).reason})`);
           const known = prices2.filter((e) => e.ok);
@@ -479,7 +486,7 @@ export async function estimateWorkflow(orgId: string, wf: WorkflowRecord): Promi
         } else {
           const items = fromProject ? (await selectCards(orgId, wf.projectId!, { statuses: trigger!.data.statuses, group: String(trigger!.data.group ?? ''), limit: max })).length : max;
           if (!fromProject) est.upTo = true;
-          const each = perItem(n, clampInt(n.data.count, 1, 4, 1));
+          const each = await perItem(n, clampInt(n.data.count, 1, 4, 1));
           add(n.id, label, items, each === null ? null : each * items, fromProject ? undefined : `up to ${max} items`);
         }
       }

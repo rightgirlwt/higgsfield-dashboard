@@ -27,6 +27,8 @@ Open http://localhost:5173 and pick a demo account on the sign‑in screen:
 
 Until you add an Anthropic key (**Settings → API keys**, or `ANTHROPIC_API_KEY`), prompt and workflow runs return **clearly labelled simulated responses** (and the demo data is flagged as simulated everywhere it's shown). Add a key and the same screens run real, billable Claude calls.
 
+**On Windows, double-click `start.bat`** in the project folder: it opens the back end and front end in two windows (leave them open) and then the app at http://localhost:5173. Close the two windows to stop. If either half is already running it leaves it alone.
+
 Other commands: `npm test` (backend tests) · `npm run typecheck` · `npm run build`.
 
 ## What's in it
@@ -84,7 +86,7 @@ Production checklist: managed Postgres + backups · `SECRETS_ENCRYPTION_KEY` sto
 
 ## Status & honest limits
 
-Verified in development: backend typecheck + **93 automated tests** (auth/RBAC, CORS, queue + workflow engine, media pagination/filters, budgets, secrets encryption, exports…), production build of the frontend, and a manual run‑through of the UI against the live backend (overview, prompt run, workflow run with live node status, monitoring, media + lightbox, tablet layout).
+Verified in development: backend typecheck + **105 automated tests** (auth/RBAC, CORS, queue + workflow engine, media pagination/filters, budgets, secrets encryption, exports…), production build of the frontend, and a manual run‑through of the UI against the live backend (overview, prompt run, workflow run with live node status, monitoring, media + lightbox, tablet layout).
 
 **Not verified against live third‑party services** (no credentials were available when this was built), so test these before relying on them:
 
@@ -123,6 +125,12 @@ Verified live: the Director was run against a real Anthropic key (it filled a st
 - All colours are CSS variables generated into `frontend/src/theme.css`. To change the brand colour, edit the `brand` scale in `frontend/scripts/generate-theme.cjs` and run `npm --prefix frontend run theme`. Components use theme-aware classes, so nothing else needs touching. Restart `npm run dev:frontend` after changing Tailwind or theme files.
 - A muted teal is the secondary colour (second chart series, some badges). White text on the brand colour meets WCAG AA contrast (5.2:1).
 
-## Costs
+## Costs, prices and credit
 
-Studio estimates and records spend using **Higgsfield's published prices** (snapshot dated in `backend/src/services/studioCatalog.ts`, `LIST_PRICES`), matched to the model, mode and resolution (e.g. Soul 2 is $0.0032 per image at 720p and $0.0057 at 1080p). Most video models carry a promotional rate until 2026-10-18 and will cost more afterwards, so refresh the snapshot after that date. These are estimates; Higgsfield's billing page is authoritative. An admin can override any model with a flat price in Settings → Higgsfield.
+- **Prices come from Higgsfield itself.** Before you approve a generation, the app asks Higgsfield's estimate endpoint (`POST /estimate/{model}`, a free lookup) for the price of exactly those settings, because price depends on things like sound, resolution and duration. That quote is what the approval dialog shows, what the 409/402 spending gates compare against, and what is recorded as spend. Answers are cached for ten minutes.
+- **Fallbacks.** Some models (Seedance, Wan, Genjutsu) are priced by length or tokens, so Higgsfield returns a written description instead of one number. For those, and whenever the lookup fails or you're not connected, the app uses a saved snapshot of list prices (`LIST_PRICES` in `backend/src/services/studioCatalog.ts`, dated `PRICES_AS_OF`). An admin flat price in Settings → Higgsfield always wins.
+- **Check prices** (Settings → Higgsfield) compares every model with Higgsfield's current quote and lists what differs. After the launch promotion date passes, the app raises one alert (bell icon) reminding you to run it.
+- **Credit left** (Overview): neither service lets this app read a balance with an ordinary key (Anthropic's usage API needs a separate admin key and only reports usage; Higgsfield shows usage in its Console). So you type in the balance you see in each console, and the dashboard subtracts the real spend it records afterwards. It only knows about spend made through this dashboard, demo data is ignored, and a warning is raised when it looks low (under 15% or $2).
+- **Live Overview.** The server announces every recorded cost (`usage:new` over Socket.IO), so the Overview, credit figures and charts refresh the moment money is spent, including Director chat.
+- The seeded demo data still counts in the Overview's headline spend figure (the notice at the top says so); the credit cards use real spend only.
+

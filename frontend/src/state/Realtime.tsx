@@ -20,6 +20,8 @@ interface RealtimeValue {
   jobs: Record<string, Run>;
   /** Bumped whenever a run changes state so pages can refetch lists. */
   runTick: number;
+  /** Bumped whenever spend is recorded (including chat), so spend figures can refresh instantly. */
+  usageTick: number;
   alertTick: number;
   clearLogs: () => void;
 }
@@ -39,6 +41,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<Record<string, Run>>({});
   const [runTick, setRunTick] = useState(0);
   const [alertTick, setAlertTick] = useState(0);
+  const [usageTick, setUsageTick] = useState(0);
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
@@ -62,6 +65,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       setJobs((j) => ({ ...j, [r.id]: r }));
       setRunTick((t) => t + 1);
     });
+    socket.on('usage:new', () => setUsageTick((t) => t + 1));
     socket.on('alert:new', (a: Alert) => {
       setAlertTick((t) => t + 1);
       (a.severity === 'critical' ? toast.error : toast.info)(a.message);
@@ -71,7 +75,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
   }, [getToken, toast]);
 
-  const value = useMemo<RealtimeValue>(() => ({ connected, snapshot, history, logs, jobs, runTick, alertTick, clearLogs: () => setLogs([]) }), [connected, snapshot, history, logs, jobs, runTick, alertTick]);
+  const value = useMemo<RealtimeValue>(() => ({ connected, snapshot, history, logs, jobs, runTick, usageTick, alertTick, clearLogs: () => setLogs([]) }), [connected, snapshot, history, logs, jobs, runTick, usageTick, alertTick]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

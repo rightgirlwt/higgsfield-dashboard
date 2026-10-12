@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../ctx';
 import { wrap } from '../lib/errors';
 import { monthToDateSpend } from '../services/alerts';
+import { creditStatus } from '../services/credits';
 import { mapRun } from '../services/jobs';
 import { parseRange } from './util';
 
@@ -53,6 +54,13 @@ dashboard.get(
       budget: { monthlyUsd: budget, monthToDateUsd: mtd, pct: budget > 0 ? Math.round((mtd / budget) * 1000) / 10 : null, alertThresholdPct: org_.rows[0].alert_threshold_pct },
       includesSimulatedData: sim.rows[0].n > 0,
     });
+  }),
+);
+
+dashboard.get(
+  '/credits',
+  wrap(async (req, res) => {
+    res.json(await creditStatus(req.user!.orgId));
   }),
 );
 

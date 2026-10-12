@@ -300,7 +300,7 @@ export interface SettingsData {
   storage: { endpoint: string; region: string; bucket: string; publicBaseUrl: string; forcePathStyle: boolean };
   billing: { monthlyBudgetUsd: number; alertThresholdPct: number };
   models: ModelInfo[];
-  higgsfield: { baseUrl: string; baseUrlFromEnv: boolean; prices: Record<string, number | null> };
+  higgsfield: { baseUrl: string; baseUrlFromEnv: boolean; prices: Record<string, number | null>; priceCheck: PriceCheck | null; promoEnds: string | null };
 }
 
 export interface SearchResults {
@@ -346,7 +346,7 @@ export interface Project {
   spentUsd?: number;
 }
 export type ItemEstimate =
-  | { itemId: string; ok: true; costUsd: number | null; outputs: number; seconds: number; unitUsd: number | null; basis: 'admin' | 'list' | null; precision: 'exact' | 'from' | null; model: string; mode: string; promoEnds: string | null }
+  | { itemId: string; ok: true; costUsd: number | null; outputs: number; seconds: number; unitUsd: number | null; basis: 'admin' | 'list' | 'live' | null; precision: 'exact' | 'from' | null; model: string; mode: string; promoEnds: string | null }
   | { itemId: string; ok: false; reason: string };
 export interface Take {
   id: string;
@@ -438,4 +438,33 @@ export interface WorkflowEstimate {
   unpriced: boolean;
   problems: string[];
   budget: { budgetUsd: number; spentUsd: number; leftUsd: number | null } | null;
+}
+
+export interface PriceRow {
+  modelId: string;
+  model: string;
+  modeId: string;
+  mode: string;
+  snapshotUsd: number | null;
+  liveUsd: number | null;
+  diffPct: number | null;
+  status: 'match' | 'changed' | 'info' | 'error';
+  description?: string;
+  note?: string;
+}
+export interface PriceCheck {
+  checkedAt: string;
+  snapshotDate: string;
+  rows: PriceRow[];
+  counts: { match: number; changed: number; info: number; error: number };
+}
+export interface CreditStatus {
+  provider: 'claude' | 'higgsfield';
+  set: boolean;
+  startingUsd: number | null;
+  asOf: string | null;
+  usedSinceUsd: number;
+  lifetimeUsedUsd: number;
+  remainingUsd: number | null;
+  low: boolean;
 }
