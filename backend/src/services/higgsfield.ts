@@ -47,6 +47,9 @@ export function normalizeBaseUrl(raw: string): string {
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Base URL must start with http:// or https://');
   if (url.username || url.password) throw new Error('Base URL must not contain credentials');
   if (config.isProd && url.protocol !== 'https:') throw new Error('Base URL must use https in production');
+  // Higgsfield's docs show full model URLs ("send requests to https://api.higgsfield.ai/higgsfield-ai/soul/...").
+  // The base is only the host; drop any pasted path so every model URL isn't doubled (which 404s).
+  if (url.hostname === 'higgsfield.ai' || url.hostname.endsWith('.higgsfield.ai')) return url.origin;
   return url.toString().replace(/\/+$/, '');
 }
 

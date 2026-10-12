@@ -54,7 +54,8 @@ export function describeHiggsfieldKey(key: string): { format: string; formatOk: 
   const [id, secret] = [key.slice(0, i), key.slice(i + 1)];
   const cls = /^[0-9a-f]+$/i.test(secret) ? 'hex' : /^[A-Za-z0-9]+$/.test(secret) ? 'letters+digits' : /^[A-Za-z0-9._~+/=-]+$/.test(secret) ? 'letters/digits/symbols' : 'unusual characters';
   const extras = [secret.includes(':') ? 'secret contains another ":"' : '', secret.includes(id) ? 'secret contains the ID again' : ''].filter(Boolean);
-  return { format: `ID ${id.length} chars : secret ${secret.length} chars (${cls})${extras.length ? '; ' + extras.join('; ') : ''}`, formatOk: HIGGSFIELD_KEY_RE.test(key) && extras.length === 0 };
+  // The key ID is the public half (the console shows it openly); only its first 8 chars are exposed, to match against the console.
+  return { format: `ID ${id.length} chars starting ${id.slice(0, 8)} : secret ${secret.length} chars (${cls})${extras.length ? '; ' + extras.join('; ') : ''}`, formatOk: HIGGSFIELD_KEY_RE.test(key) && extras.length === 0 };
 }
 
 /** Never returns key material — only whether one is set, its last 4 characters and (for Higgsfield) its shape. */

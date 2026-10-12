@@ -34,7 +34,7 @@ export interface StudioModel {
   build: (p: Plane) => { path: string; body: Record<string, unknown> };
 }
 
-const ASPECT_IMAGE = ['1:1', '3:4', '4:3', '9:16', '16:9'];
+const ASPECT_IMAGE = ['1:1', '3:4', '4:3', '9:16', '16:9', '2:3', '3:2']; // Soul 2 options per Higgsfield's API reference
 const ASPECT_VIDEO = ['16:9', '9:16', '1:1'];
 
 const soulSettings: Record<string, SettingSpec> = {
@@ -87,7 +87,7 @@ export const STUDIO_MODELS: StudioModel[] = [
     roles: {},
     settings: soulSettings,
     verified: true,
-    note: 'Path and fields match Higgsfield’s own Soul 2 example. The list of aspect ratios is a best guess (the example uses 4:3).',
+    note: 'Path, fields and option lists match Higgsfield’s Soul 2 API reference.',
     build: soulBuild('higgsfield-ai/soul/v2/standard'),
   },
   {

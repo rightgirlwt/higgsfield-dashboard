@@ -188,6 +188,8 @@ describe('studio API (against a fake Higgsfield platform)', () => {
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: 'http://user:pw@x.test' } })).status).toBe(400);
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: 'not a url' } })).status).toBe(400);
     expect((await call('PUT', '/settings/higgsfield', { as: 'user', body: { baseUrl: fake.url } })).status).toBe(403);
+    // A pasted full model URL on higgsfield.ai is trimmed to the host (regression: doubled paths 404'd every model)
+    expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: 'https://api.higgsfield.ai/higgsfield-ai/soul/v2/standard' } })).json.baseUrl).toBe('https://api.higgsfield.ai');
     expect((await call('PUT', '/settings/higgsfield', { as: 'admin', body: { baseUrl: fake.url + '/' } })).json.baseUrl).toBe(fake.url);
     // URL alone is not enough - a key is required too
     expect((await call('GET', '/studio/models', { as: 'viewer' })).json.connected).toBe(false);
