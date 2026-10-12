@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { getDb } from '../ctx';
 import { getModel } from '../lib/pricing';
 import { placeholderImage } from '../lib/placeholder';
@@ -13,6 +14,32 @@ import { recordUsage } from './usage';
 
 export const NODE_TYPES = ['trigger', 'llm', 'generate', 'transform', 'action', 'output'] as const;
 export type NodeType = (typeof NODE_TYPES)[number];
+
+/** Request-body shape for a workflow definition, shared by the REST routes and the Claude chat tool. */
+export const definitionSchema = z.object({
+  nodes: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(64),
+        type: z.enum(NODE_TYPES),
+        position: z.object({ x: z.number(), y: z.number() }).optional(),
+        data: z.record(z.string(), z.any()).default({}),
+      }),
+    )
+    .max(100),
+  edges: z.array(z.object({ id: z.string().min(1).max(100), source: z.string(), target: z.string() })).max(300),
+});
+
+/** Plain-language description of every node type, given to the Claude chat so it can build valid workflows. */
+export const NODE_REFERENCE = `Workflow definition = {nodes:[{id,type,position:{x,y},data}], edges:[{id,source,target}]}. Exactly one trigger. Data flows along edges; a node's text input is available as {{input}}, run variables as {{vars.name}}, any earlier node's result as {{nodes.<nodeId>.output}}.
+Node types and their data fields:
+- trigger: {label, source:'manual'|'schedule'|'higgsfield', sampleInput?, intervalMinutes? (schedule)}
+- llm: {label, model (a Claude model id), systemPrompt?, userPrompt (required), maxTokens?}
+- generate: {label, model (a Studio model id from list_models), prompt (required), settings?:{...mode settings}, startUrl?, endUrl?, count? (1-4)}  -- this SPENDS money when the workflow runs
+- transform: {label, mode:'template'|'json_parse'|'pick'|'regex_extract'|'uppercase'|'lowercase'|'trim'|'split_lines'|'join', template? (template), path? (pick), pattern? (regex_extract), separator? (join)}
+- action: {label, action:'save_media'|'notify'|'log', message?, title?, url?, tags?, mediaType?:'photo'|'video'}
+- output: {label}  -- the run result
+Lay nodes out left to right, about 280px apart.`;
 
 export interface WfNode {
   id: string;

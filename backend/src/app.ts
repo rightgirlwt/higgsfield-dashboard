@@ -11,6 +11,7 @@ import { dashboard } from './routes/dashboard';
 import { exporter } from './routes/export';
 import { media } from './routes/media';
 import { monitoring } from './routes/monitoring';
+import { projects } from './routes/projects';
 import { prompts } from './routes/prompts';
 import { runs } from './routes/runs';
 import { search } from './routes/search';
@@ -66,6 +67,7 @@ export function createApp() {
   api.use('/prompts/run', runLimiter);
   api.use('/prompts/compare', runLimiter);
   api.use('/studio/generate', runLimiter);
+  api.use(/^\/projects\/[^/]+\/(chat|generate)$/, runLimiter);
   api.use(/^\/workflows\/[^/]+\/run$/, runLimiter);
 
   api.use('/dashboard', dashboard);
@@ -74,6 +76,7 @@ export function createApp() {
   api.use('/runs', runs);
   api.use('/media', media);
   api.use('/studio', studio);
+  api.use('/projects', projects);
   api.use('/monitoring', monitoring);
   api.use('/settings', settings);
   api.use('/team', team);

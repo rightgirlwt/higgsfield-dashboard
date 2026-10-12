@@ -4,24 +4,10 @@ import { getDb } from '../ctx';
 import { badRequest, notFound, wrap } from '../lib/errors';
 import { createRun, mapRun, queue } from '../services/jobs';
 import { WORKFLOW_TEMPLATES } from '../services/templates';
-import { validateWorkflow, workflowWork, NODE_TYPES, type WorkflowDefinition } from '../services/workflowEngine';
+import { definitionSchema, validateWorkflow, workflowWork, type WorkflowDefinition } from '../services/workflowEngine';
 import { likePattern, uuidParam } from './util';
 
 export const workflows = Router();
-
-const definitionSchema = z.object({
-  nodes: z
-    .array(
-      z.object({
-        id: z.string().min(1).max(64),
-        type: z.enum(NODE_TYPES),
-        position: z.object({ x: z.number(), y: z.number() }).optional(),
-        data: z.record(z.string(), z.any()).default({}),
-      }),
-    )
-    .max(100),
-  edges: z.array(z.object({ id: z.string().min(1).max(100), source: z.string(), target: z.string() })).max(300),
-});
 
 const mapWf = (w: any, extra: Record<string, unknown> = {}) => ({
   id: w.id, name: w.name, description: w.description, status: w.status, version: w.version,

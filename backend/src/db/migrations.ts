@@ -194,6 +194,78 @@ ALTER TABLE job_runs ADD CONSTRAINT job_runs_kind_check CHECK (kind IN ('prompt'
 CREATE INDEX media_source_idx ON media_assets (org_id, (metadata->>'source'), created_at DESC);
 `,
   },
+  {
+    version: 3,
+    name: 'projects_board_and_chat',
+    sql: `
+ALTER TABLE projects ADD COLUMN type text NOT NULL DEFAULT 'micro_drama' CHECK (type IN ('micro_drama','ad_campaign'));
+ALTER TABLE projects ADD COLUMN description text NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN brief jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE projects ADD COLUMN budget_usd double precision NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN aspect text NOT NULL DEFAULT '9:16';
+ALTER TABLE projects ADD COLUMN status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived'));
+ALTER TABLE projects ADD COLUMN created_by uuid REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE projects ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
+CREATE INDEX projects_org_idx ON projects(org_id, updated_at DESC);
+
+CREATE TABLE project_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind text NOT NULL DEFAULT 'shot' CHECK (kind IN ('shot','ad_unit')),
+  group_name text NOT NULL DEFAULT '',
+  position integer NOT NULL DEFAULT 0,
+  title text NOT NULL,
+  prompt text NOT NULL DEFAULT '',
+  notes text NOT NULL DEFAULT '',
+  model_id text NOT NULL DEFAULT '',
+  mode text NOT NULL DEFAULT '',
+  settings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  media jsonb NOT NULL DEFAULT '{}'::jsonb,
+  meta jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','ready','generating','review','approved','rejected')),
+  last_error text,
+  approved_asset_id uuid REFERENCES media_assets(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX project_items_project_idx ON project_items(project_id, position, created_at);
+
+CREATE TABLE project_assets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind text NOT NULL DEFAULT 'reference' CHECK (kind IN ('character','product','logo','location','style','reference')),
+  name text NOT NULL,
+  url text NOT NULL DEFAULT '',
+  notes text NOT NULL DEFAULT '',
+  character_id text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX project_assets_project_idx ON project_assets(project_id, created_at);
+
+CREATE TABLE chat_threads (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX chat_threads_project_idx ON chat_threads(project_id);
+
+CREATE TABLE chat_messages (
+  id bigserial PRIMARY KEY,
+  thread_id uuid NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  role text NOT NULL CHECK (role IN ('user','assistant')),
+  content jsonb NOT NULL,
+  model text,
+  cost_usd double precision NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX chat_messages_thread_idx ON chat_messages(thread_id, id);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

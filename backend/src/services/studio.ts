@@ -27,6 +27,8 @@ export interface GenerateParams {
   /** Number of separate requests for models without native batching (1-4). */
   count?: number;
   workflowId?: string | null;
+  /** Extra metadata stored on each saved asset, e.g. { projectId, itemId } for the project board. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface GeneratedAsset {
@@ -125,8 +127,8 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
         `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workflow_id, run_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9) RETURNING id`,
         [
-          orgId, u.type, title, u.url, thumb, ['studio', model.id],
-          JSON.stringify({ source: 'studio', prompt, model: model.id, modelLabel: model.label, mode: mode.id, modeLabel: mode.label, settings, requestId: r.id, simulated }),
+          orgId, u.type, title, u.url, thumb, ['studio', model.id, ...(p.metadata?.projectId ? ['project'] : [])],
+          JSON.stringify({ ...p.metadata, source: 'studio', prompt, model: model.id, modelLabel: model.label, mode: mode.id, modeLabel: mode.label, settings, requestId: r.id, simulated }),
           p.workflowId ?? null, runId,
         ],
       );
