@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDb } from '../ctx';
 import { badRequest, notFound, wrap } from '../lib/errors';
 import { clearChat, directorTurn, loadMessages, toDtos } from '../services/director';
+import { manifestCsv, scriptMarkdown, streamClipsZip } from '../services/projectExport';
 import { PROJECT_TYPE_IDS, PROJECT_TYPES } from '../services/projectTypes';
 import {
   addItems, ASSET_KINDS, cleanBrief, emptyBrief, estimateItems, expandVariants, itemCreate, itemUpdate, loadItem, loadItems, loadProject, loadTakes,
@@ -223,6 +224,33 @@ projects.post(
     const b = z.object({ ids: z.array(z.string().uuid()).min(1).max(60), expectedTotalUsd: z.number().min(0).max(1_000_000) }).parse(req.body);
     const r = await startGeneration(u.orgId, u.id, project, b.ids, { expectedTotalUsd: b.expectedTotalUsd });
     res.status(202).json(r);
+  }),
+);
+
+// ---- export ---------------------------------------------------------------------------------------------
+const fileName = (name: string) => name.normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').toLowerCase().slice(0, 50) || 'project';
+
+projects.get(
+  '/:id/export/script.md',
+  wrap(async (req, res) => {
+    const project = await loadProject(req.user!.orgId, uuidParam(req));
+    res.type('text/markdown; charset=utf-8').attachment(`${fileName(project.name)}-script.md`).send(await scriptMarkdown(req.user!.orgId, project.id));
+  }),
+);
+
+projects.get(
+  '/:id/export/shot-list.csv',
+  wrap(async (req, res) => {
+    const project = await loadProject(req.user!.orgId, uuidParam(req));
+    res.type('text/csv; charset=utf-8').attachment(`${fileName(project.name)}-shot-list.csv`).send(await manifestCsv(req.user!.orgId, project.id));
+  }),
+);
+
+projects.get(
+  '/:id/export/clips.zip',
+  wrap(async (req, res) => {
+    const project = await loadProject(req.user!.orgId, uuidParam(req));
+    await streamClipsZip(req.user!.orgId, project.id, res);
   }),
 );
 

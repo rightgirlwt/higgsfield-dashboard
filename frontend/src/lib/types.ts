@@ -135,7 +135,7 @@ export interface PromptDetail {
   variableNames: string[];
 }
 
-export type NodeType = 'trigger' | 'llm' | 'generate' | 'transform' | 'action' | 'output';
+export type NodeType = 'trigger' | 'llm' | 'generate' | 'foreach' | 'transform' | 'action' | 'output';
 
 export type MediaRole = 'start' | 'end' | 'reference' | 'video' | 'audio';
 
@@ -245,6 +245,7 @@ export interface WorkflowListItem {
 
 export interface Workflow {
   id: string;
+  projectId?: string | null;
   name: string;
   description: string;
   status: 'draft' | 'active' | 'paused';
@@ -428,4 +429,13 @@ export interface ChatChanged {
   brief: boolean;
   workflows: boolean;
   assets: boolean;
+}
+
+export interface WorkflowEstimate {
+  totalUsd: number;
+  upTo: boolean;
+  steps: { nodeId: string; label: string; items: number; costUsd: number | null; note?: string }[];
+  unpriced: boolean;
+  problems: string[];
+  budget: { budgetUsd: number; spentUsd: number; leftUsd: number | null } | null;
 }

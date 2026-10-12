@@ -1,4 +1,4 @@
-import { ArrowLeft, Layers, MessageSquare, Plus, Workflow as WorkflowIcon } from 'lucide-react';
+import { ArrowLeft, Download, Layers, MessageSquare, Plus, Workflow as WorkflowIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCan } from '../auth/context';
@@ -9,7 +9,7 @@ import { ChatPanel } from '../components/project/ChatPanel';
 import { GenerateDialog } from '../components/project/GenerateDialog';
 import { ItemEditor } from '../components/project/ItemEditor';
 import { VariantDialog } from '../components/project/VariantDialog';
-import { Badge, Button, Card, cx, EmptyState, ErrorState, PageHeader, ProgressBar, Skeleton } from '../components/ui';
+import { Badge, Button, Card, cx, EmptyState, ErrorState, Modal, PageHeader, ProgressBar, Skeleton } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
@@ -27,6 +27,7 @@ export default function Project() {
   const { runTick } = useRealtime();
   const snapApi = useApi<ProjectSnapshot>(`/projects/${id}`);
   const catalogApi = useApi<StudioCatalog>('/studio/models');
+  const templates = useApi<{ id: string; name: string; description: string; category: string }[]>('/workflows/templates');
   const snap = snapApi.data;
   const catalog = catalogApi.data;
   useDocumentTitle(snap?.project.name ?? 'Project');
@@ -80,6 +81,32 @@ export default function Project() {
     }
   };
 
+  const [exportOpen, setExportOpen] = useState(false);
+  const closeExport = useCallback(() => setExportOpen(false), []);
+  const [exporting, setExporting] = useState<string | null>(null);
+  const download = async (what: 'script.md' | 'shot-list.csv' | 'clips.zip') => {
+    if (!snap) return;
+    setExporting(what);
+    try {
+      const base = snap.project.name.normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').toLowerCase().slice(0, 50) || 'project';
+      await api.download(`/projects/${snap.project.id}/export/${what}`, what === 'clips.zip' ? `${base}-approved-clips.zip` : what === 'script.md' ? `${base}-script.md` : `${base}-shot-list.csv`);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const fromTemplate = async (templateId: string) => {
+    if (!snap) return;
+    try {
+      const w = await api.post<{ id: string }>('/workflows/from-template', { templateId, projectId: snap.project.id });
+      navigate(`/workflows/${w.id}`);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  };
+
   const newWorkflow = async () => {
     if (!snap) return;
     try {
@@ -116,6 +143,7 @@ export default function Project() {
         title={project.name}
         actions={
           <>
+            <Button onClick={() => setExportOpen(true)}><Download className="h-4 w-4" aria-hidden /> Export</Button>
             {type.id === 'ad_campaign' && canWrite && <Button onClick={() => setVariants(true)}><Layers className="h-4 w-4" aria-hidden /> Variant matrix</Button>}
             {canWrite && <Button variant="primary" onClick={() => void addItem(groups[groups.length - 1] ?? '')}><Plus className="h-4 w-4" aria-hidden /> Add {type.itemLabel.toLowerCase()}</Button>}
           </>
@@ -163,6 +191,19 @@ export default function Project() {
                 <p className="max-w-2xl text-sm text-slate-400">Workflows run steps automatically: write with Claude, generate, save. Ask the Director to build one, or start a blank one.</p>
                 {canWrite && <Button variant="primary" onClick={() => void newWorkflow()}><Plus className="h-4 w-4" aria-hidden /> New workflow</Button>}
               </div>
+              {canWrite && templates.data && templates.data.filter((t) => t.category === 'Projects').length > 0 && (
+                <div className="mb-5">
+                  <h3 className="mb-2 text-sm font-semibold text-slate-300">Start from a template</h3>
+                  <ul className="grid gap-3 sm:grid-cols-2">
+                    {templates.data.filter((t) => t.category === 'Projects').map((t) => (
+                      <li key={t.id} className="flex flex-col justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-card">
+                        <div><div className="font-medium">{t.name}</div><p className="mt-1 text-xs text-slate-500">{t.description}</p></div>
+                        <Button size="sm" onClick={() => void fromTemplate(t.id)}><Plus className="h-3.5 w-3.5" aria-hidden /> Use this template</Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {snap.workflows.length === 0 ? (
                 <EmptyState title="No workflows in this project" hint="Try asking the Director: “Build a workflow that renders every approved shot in episode 1.”" />
               ) : (
@@ -187,6 +228,21 @@ export default function Project() {
 
       <ItemEditor projectId={project.id} item={editing} items={snap.items} assets={snap.assets} catalog={catalog} type={type} groups={groups} onClose={closeEditor} onSaved={reload} onGenerate={(i) => { setEditingId(null); setGenerating([i]); }} />
       <GenerateDialog projectId={project.id} items={generating} pricesAsOf={catalog?.pricesAsOf} onClose={closeGenerate} onStarted={() => { setGenerating(null); setSelected(new Set()); reload(); }} />
+      <Modal open={exportOpen} onClose={closeExport} title="Export">
+        <div className="space-y-3">
+          <p className="text-sm text-slate-400">Take the work into your editor or share it. Clips are your <strong>approved</strong> takes ({approved} of {snap.items.length}), numbered in board order.</p>
+          {([
+            { id: 'clips.zip', title: 'Approved clips (ZIP)', hint: 'Every approved image and video, named in order, plus the shot list and script.', disabled: approved === 0 },
+            { id: 'script.md', title: 'Script (Markdown)', hint: `The ${type.id === 'micro_drama' ? 'story bible' : 'brand kit'} and every ${type.itemLabel.toLowerCase()} with prompts and notes.`, disabled: false },
+            { id: 'shot-list.csv', title: `${type.itemLabel} list (CSV)`, hint: 'A spreadsheet: order, scene, status, model, prompt, estimated cost, file name.', disabled: false },
+          ] as const).map((o) => (
+            <div key={o.id} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 p-3">
+              <div><div className="text-sm font-medium">{o.title}</div><div className="text-xs text-slate-500">{o.disabled ? 'Approve at least one take first.' : o.hint}</div></div>
+              <Button loading={exporting === o.id} disabled={o.disabled || exporting !== null} onClick={() => void download(o.id)}><Download className="h-4 w-4" aria-hidden /> Download</Button>
+            </div>
+          ))}
+        </div>
+      </Modal>
       <VariantDialog projectId={project.id} open={variants} items={snap.items} catalog={catalog} onClose={closeVariants} onCreated={() => { setVariants(false); reload(); }} />
     </div>
   );

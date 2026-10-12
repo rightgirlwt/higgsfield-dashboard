@@ -95,3 +95,17 @@ Socket.IO events (server → client): `monitoring:update`, `job:update`, `log:ne
 - **Simulated mode.** With no key or base URL, requests are fabricated and "complete" after three polls with placeholder media, flagged `simulated`; nothing is billed. Uploads and characters require a real connection.
 - **Workflows.** The `generate` node calls the same function inside a workflow run (media is attached to the workflow; spend is recorded against it). The "Higgsfield" trigger reads the most recent Studio results from the database.
 - **Retention.** Higgsfield keeps outputs for at least 7 days and marks uploaded inputs temporary, so result and reference URLs can expire; download anything you need to keep.
+
+## Projects and the Director
+
+**Data** (migration 3): `projects` gains `type`, `brief` (jsonb), `budget_usd`, `aspect`; new tables `project_items` (the board: cards with prompt, model, settings, media, status, approved take), `project_assets` (characters/products/logos, optional Soul ID), `chat_threads` and `chat_messages` (the stored Anthropic message blocks, one thread per project). Takes are not a table: a generated asset carries `metadata.projectId/itemId`, so the media library stays the single store.
+
+**Project types are data** (`services/projectTypes.ts`): brief fields, wording and the guidance given to Claude. Adding a type means adding an entry and widening the `projects.type` check in a new migration.
+
+**One way to spend.** Board generation (`services/projects.ts: startGeneration`), workflow generate/for-each steps and the Studio page all end in `runStudioGeneration`, which prices from `LIST_PRICES` or the admin override and records usage. Spending is gated before queueing: the board re-prices and compares with the total the person approved; workflows do the same with `estimateWorkflow`; the scheduler refuses to run a workflow that would spend. A card's status (`draft → ready → generating → review → approved`) is maintained by `generateCard`, which both the board and the for-each node use.
+
+**The Director** (`services/director.ts`) is a manual tool-use loop on the Messages API. The long instructions and tool list are cached (`cache_control`); a per-turn snapshot of the project (brief, assets, board with prices) follows. Stored history is trimmed to start at a plain user message and to never contain a `tool_use` without its `tool_result`. Tool errors go back to Claude as `is_error` results so it can correct itself; a tool call cut off by the token limit is never executed. Costs use cache-aware rates and are recorded as usage and counted against the project. Each turn can be at most 8 rounds.
+
+**Workflow additions.** `foreach` runs a few generations at a time and carries on past item failures; `project` trigger outputs board cards as JSON; `{{project.*}}` variables come from the workflow's project. `estimateWorkflow` prices a run without running it (list length unknown ⇒ `maxItems` ceiling, flagged `upTo`).
+
+**Export** streams a ZIP with `fflate` (flat memory); URLs are only fetched when public https (resolved addresses checked against private, loopback, link-local and IPv4-mapped ranges).

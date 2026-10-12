@@ -597,3 +597,95 @@ describe('workflows in a project (cards, for-each, cost gate)', () => {
     for (const w of [spender, free]) await call('PUT', `/workflows/${w.id}`, { as: 'user', body: { status: 'paused' } });
   });
 });
+
+describe('export', () => {
+  let proj: any;
+  let files: http.Server;
+  let filesUrl = '';
+  const bytes = { a: Buffer.from('FAKE-MP4-A-'.repeat(2000)), b: Buffer.from([1, 2, 3, 4, 5, 250, 251, 252]) };
+
+  beforeAll(async () => {
+    files = http.createServer((req, res) => {
+      if (req.url === '/a.mp4') return void res.writeHead(200, { 'content-type': 'video/mp4' }).end(bytes.a);
+      if (req.url === '/b.png') return void res.writeHead(200, { 'content-type': 'image/png' }).end(bytes.b);
+      res.writeHead(404).end('nope');
+    });
+    await new Promise<void>((r) => files.listen(0, '127.0.0.1', r));
+    filesUrl = `http://127.0.0.1:${(files.address() as AddressInfo).port}`;
+  });
+  afterAll(() => void files.close());
+
+  it('only fetches public https addresses (never the server’s own network)', async () => {
+    const { isSafeFetchUrl, isPrivateAddress } = await import('../src/services/projectExport');
+    for (const bad of ['https://127.0.0.1/x', 'https://10.1.2.3/x', 'https://192.168.0.5/x', 'https://169.254.169.254/latest/meta-data', 'https://[::1]/x', 'https://[fd00::1]/x', 'http://8.8.8.8/x', 'https://user:pw@8.8.8.8/x', 'ftp://8.8.8.8/x', 'not a url', 'https://[::ffff:127.0.0.1]/x']) {
+      expect(await isSafeFetchUrl(bad), bad).toBe(false);
+    }
+    expect(await isSafeFetchUrl('https://8.8.8.8/clip.mp4')).toBe(true);
+    expect(isPrivateAddress('172.16.0.1')).toBe(true);
+    expect(isPrivateAddress('172.32.0.1')).toBe(false);
+    expect(isPrivateAddress('100.64.0.1')).toBe(true);
+  });
+
+  it('exports the script, shot list and approved clips in board order, listing anything that could not be fetched', async () => {
+    proj = (await call('POST', '/projects', { as: 'user', body: { name: 'Café “Noir” — Ep 1', type: 'micro_drama' } })).json;
+    await call('PUT', `/projects/${proj.id}`, { as: 'user', body: { brief: { logline: 'A barista hears a confession.' } } });
+    expect((await call('GET', `/projects/${proj.id}/export/clips.zip`, { as: 'user' })).status).toBe(400); // nothing approved yet
+
+    const made = (await call('POST', `/projects/${proj.id}/items`, {
+      as: 'user',
+      body: { items: [
+        { group: 'Ep 1 · Scene 1', title: 'Opening, steam', prompt: 'Steam over a cup', notes: 'VO: "Closing time."', modelId: 'kling-3-std', settings: { duration: 5 } },
+        { group: 'Ep 1 · Scene 1', title: 'The confession', prompt: 'Close on her face', modelId: 'soul-2' },
+        { group: 'Ep 1 · Scene 2', title: 'Street', prompt: 'Rain on neon', modelId: 'kling-3-std' },
+        { group: 'Ep 1 · Scene 2', title: 'Not approved', prompt: 'x', modelId: 'kling-3-std' },
+      ] },
+    })).json;
+    // an approved take per card: two reachable, one that 404s
+    const urls = [`${filesUrl}/a.mp4`, `${filesUrl}/b.png`, `${filesUrl}/missing.mp4`];
+    for (const [n, url] of urls.entries()) {
+      const type = url.endsWith('.png') ? 'photo' : 'video';
+      const a = await db.query(
+        `INSERT INTO media_assets (org_id, type, title, url, thumb_url, metadata) SELECT org_id,$2,'t',$3,$3,$4::jsonb FROM projects WHERE id=$1 RETURNING id`,
+        [proj.id, type, url, JSON.stringify({ projectId: proj.id, itemId: made[n].id })],
+      );
+      expect((await call('PUT', `/projects/${proj.id}/items/${made[n].id}`, { as: 'user', body: { approvedAssetId: a.rows[0].id } })).json.status).toBe('approved');
+    }
+
+    const md = await fetch(`${base}/api/projects/${proj.id}/export/script.md`, { headers: { authorization: `Bearer ${tokens.viewer}` } });
+    expect(md.status).toBe(200);
+    expect(md.headers.get('content-disposition')).toMatch(/attachment; filename="cafe-noir-ep-1-script\.md"/);
+    const script = await md.text();
+    expect(script).toContain('# Café “Noir” — Ep 1');
+    expect(script).toContain('A barista hears a confession.');
+    expect(script).toMatch(/### Ep 1 · Scene 1[\s\S]*#### Opening, steam\s+`approved`\s+· clip 001/);
+    expect(script).toContain('VO: "Closing time."');
+    expect(script).toMatch(/#### Not approved\s+`draft`\s*\n/);
+
+    const csvRes = await fetch(`${base}/api/projects/${proj.id}/export/shot-list.csv`, { headers: { authorization: `Bearer ${tokens.viewer}` } });
+    const raw = new Uint8Array(await csvRes.arrayBuffer());
+    expect([...raw.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // UTF-8 byte-order mark so Excel reads accents correctly
+    const csv = new TextDecoder('utf-8', { ignoreBOM: true }).decode(raw);
+    const lines = csv.slice(1).trim().split('\n');
+    expect(lines[0]).toBe('order,group,title,status,model,mode,prompt,notes,estimated_cost_usd,clip_file,approved_url');
+    expect(lines).toHaveLength(5);
+    expect(lines[1]).toMatch(/^1,Ep 1 · Scene 1,"Opening, steam",approved,kling-3-std,/);
+    expect(lines[1]).toContain('001-ep-1-scene-1-opening-steam.mp4');
+    expect(lines[4]).toMatch(/^,Ep 1 · Scene 2,Not approved,draft,/); // unapproved cards have no order or file
+
+    const { unzipSync, strFromU8 } = await import('fflate');
+    const res = await fetch(`${base}/api/projects/${proj.id}/export/clips.zip`, { headers: { authorization: `Bearer ${tokens.viewer}` } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/zip');
+    expect(res.headers.get('content-disposition')).toMatch(/cafe-noir-ep-1-approved-clips\.zip/);
+    const zip = unzipSync(new Uint8Array(await res.arrayBuffer()));
+    expect(Object.keys(zip).sort()).toEqual(['001-ep-1-scene-1-opening-steam.mp4', '002-ep-1-scene-1-the-confession.png', 'MISSING.txt', 'manifest.csv', 'script.md']);
+    expect(Buffer.from(zip['001-ep-1-scene-1-opening-steam.mp4']).equals(bytes.a)).toBe(true);
+    expect(Buffer.from(zip['002-ep-1-scene-1-the-confession.png']).equals(bytes.b)).toBe(true);
+    expect(strFromU8(zip['MISSING.txt'])).toMatch(/003-ep-1-scene-2-street\.mp4: HTTP 404/);
+    expect(strFromU8(zip['script.md'])).toContain('# Café “Noir” — Ep 1');
+  });
+
+  it('cannot export another project’s files', async () => {
+    expect((await call('GET', `/projects/${'0'.repeat(8)}-0000-4000-8000-000000000000/export/script.md`, { as: 'user' })).status).toBe(404);
+  });
+});

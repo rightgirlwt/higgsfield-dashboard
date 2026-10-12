@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Bell, Brain, CheckCircle2, CircleDot, Flag, Play, Save, Shuffle, Sparkles, Trash2, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Bell, Brain, CheckCircle2, CircleDot, Flag, Play, Repeat, Save, Shuffle, Sparkles, Trash2, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
   addEdge,
@@ -23,7 +23,7 @@ import { api, errorMessage } from '../lib/api';
 import { dateTime, ms, timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
 import { cssColor } from '../lib/theme';
-import type { ModelInfo, NodeType, Run, RunLog, StudioCatalog, ValidationIssue, Workflow, WorkflowDefinition } from '../lib/types';
+import type { ModelInfo, NodeType, Run, RunLog, StudioCatalog, ValidationIssue, Workflow, WorkflowDefinition, WorkflowEstimate } from '../lib/types';
 import { useRealtime } from '../state/Realtime';
 import { useToast } from '../state/Toast';
 
@@ -39,6 +39,7 @@ const META: Record<NodeType, { label: string; icon: typeof Zap; ring: string; ch
   trigger: { label: 'Trigger', icon: Zap, ring: 'border-emerald-500/60', chip: 'bg-emerald-500/15 text-emerald-300', blurb: 'Input source' },
   llm: { label: 'LLM', icon: Brain, ring: 'border-violet-500/60', chip: 'bg-violet-500/15 text-violet-300', blurb: 'Claude prompt' },
   generate: { label: 'Generate', icon: Sparkles, ring: 'border-pink-500/60', chip: 'bg-pink-500/15 text-pink-300', blurb: 'Higgsfield image/video' },
+  foreach: { label: 'For each', icon: Repeat, ring: 'border-orange-500/60', chip: 'bg-orange-500/15 text-orange-300', blurb: 'One generation per item' },
   transform: { label: 'Transform', icon: Shuffle, ring: 'border-cyan-500/60', chip: 'bg-cyan-500/15 text-cyan-300', blurb: 'Reshape data' },
   action: { label: 'Action', icon: Bell, ring: 'border-amber-500/60', chip: 'bg-amber-500/15 text-amber-300', blurb: 'Save / notify' },
   output: { label: 'Output', icon: Flag, ring: 'border-sky-500/60', chip: 'bg-sky-500/15 text-sky-300', blurb: 'Result' },
@@ -47,11 +48,13 @@ const META: Record<NodeType, { label: string; icon: typeof Zap; ring: string; ch
 function summary(type: NodeType, d: NData): string {
   switch (type) {
     case 'trigger':
-      return d.source === 'schedule' ? `Every ${d.intervalMinutes ?? 60} min` : d.source === 'higgsfield' ? 'Recent Studio results' : 'Manual';
+      return d.source === 'schedule' ? `Every ${d.intervalMinutes ?? 60} min` : d.source === 'higgsfield' ? 'Recent Studio results' : d.source === 'project' ? 'Project cards' : 'Manual';
     case 'llm':
       return d.model || 'default model';
     case 'generate':
       return d.model || 'pick a model';
+    case 'foreach':
+      return (d.mode ?? 'cards') === 'cards' ? 'Render board cards' : `Prompt × items${d.model ? ` · ${d.model}` : ''}`;
     case 'transform':
       return d.mode || 'template';
     case 'action':
@@ -89,12 +92,13 @@ function FlowNode({ type, data, selected }: NodeProps<NData>) {
     </div>
   );
 }
-const nodeTypes = { trigger: FlowNode, llm: FlowNode, generate: FlowNode, transform: FlowNode, action: FlowNode, output: FlowNode };
+const nodeTypes = { trigger: FlowNode, llm: FlowNode, generate: FlowNode, foreach: FlowNode, transform: FlowNode, action: FlowNode, output: FlowNode };
 
 const DEFAULT_DATA: Record<NodeType, NData> = {
   trigger: { label: 'Trigger', source: 'manual' },
   llm: { label: 'Claude prompt', userPrompt: 'Summarize:\n\n{{input}}', maxTokens: 512 },
   generate: { label: 'Generate media', model: 'soul-2', prompt: '{{input}}', count: 1 },
+  foreach: { label: 'For each item', mode: 'cards', maxItems: 20, concurrency: 2 },
   transform: { label: 'Transform', mode: 'template', template: '{{input}}' },
   action: { label: 'Action', action: 'log', message: '{{input}}' },
   output: { label: 'Output' },
@@ -154,6 +158,8 @@ function Builder({ initial }: { initial: Workflow }) {
   const [runOpen, setRunOpen] = useState(false);
   const [runInput, setRunInput] = useState('');
   const [starting, setStarting] = useState(false);
+  const [est, setEst] = useState<WorkflowEstimate | null>(null);
+  const [estError, setEstError] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [panel, setPanel] = useState<'run' | 'history'>('run');
   const counter = useRef(nodes.length);
@@ -237,17 +243,36 @@ function Builder({ initial }: { initial: Workflow }) {
     }
   };
 
+  /** The server prices a run from the SAVED workflow, so unsaved edits are saved first; then the person sees the cost before confirming. */
+  const loadEstimate = async () => {
+    setEst(null);
+    setEstError(null);
+    try {
+      setEst(await api.post<WorkflowEstimate>(`/workflows/${initial.id}/estimate`));
+    } catch (e) {
+      setEstError(errorMessage(e));
+    }
+  };
+  const openRun = async () => {
+    if (dirty && !(await save())) return;
+    setRunOpen(true);
+    void loadEstimate();
+  };
+  const closeRun = useCallback(() => setRunOpen(false), []);
+
   const startRun = async () => {
+    if (!est) return;
     setStarting(true);
     try {
-      if (dirty && !(await save())) return;
-      const r = await api.post<{ run: Run }>(`/workflows/${initial.id}/run`, { input: runInput.trim() ? { text: runInput } : {} });
+      const spends = est.steps.length > 0;
+      const r = await api.post<{ run: Run }>(`/workflows/${initial.id}/run`, { input: runInput.trim() ? { text: runInput } : {}, ...(spends ? { expectedTotalUsd: est.totalUsd } : {}) });
       setActiveRun(r.run.id);
       setPanel('run');
       setRunOpen(false);
       history.reload();
     } catch (e) {
       toast.error(errorMessage(e));
+      void loadEstimate(); // the price may have changed; show the current one
     } finally {
       setStarting(false);
     }
@@ -327,7 +352,7 @@ function Builder({ initial }: { initial: Workflow }) {
               <Button loading={saving} onClick={() => void save()} disabled={!dirty}>
                 <Save className="h-4 w-4" aria-hidden /> Save
               </Button>
-              <Button variant="primary" disabled={errors.length > 0} title={errors.length ? 'Fix validation errors first' : undefined} onClick={() => setRunOpen(true)}>
+              <Button variant="primary" disabled={errors.length > 0} title={errors.length ? 'Fix validation errors first' : undefined} onClick={() => void openRun()}>
                 <Play className="h-4 w-4" aria-hidden /> Run
               </Button>
             </>
@@ -379,7 +404,7 @@ function Builder({ initial }: { initial: Workflow }) {
           <Card className="p-4">
             <CardHeader eyebrow="Inspector" title={sel ? `${META[sel.type as NodeType].label} node` : 'Select a node'} />
             {sel ? (
-              <Inspector node={sel} models={models.data ?? []} studioCatalog={studioCatalog.data} disabled={!canWrite} onChange={(p) => patchNode(sel.id, p)} onDelete={() => deleteNode(sel.id)} />
+              <Inspector node={sel} models={models.data ?? []} studioCatalog={studioCatalog.data} inProject={!!initial.projectId} disabled={!canWrite} onChange={(p) => patchNode(sel.id, p)} onDelete={() => deleteNode(sel.id)} />
             ) : (
               <p className="text-sm text-slate-500">Click a node to configure it. Use <code>{'{{input}}'}</code> in prompts to reference the previous node’s output, or <code>{'{{nodes.<id>.output}}'}</code> for any earlier node.</p>
             )}
@@ -460,15 +485,39 @@ function Builder({ initial }: { initial: Workflow }) {
         )}
       </Card>
 
-      <Modal open={runOpen} onClose={() => setRunOpen(false)} title="Run workflow">
+      <Modal open={runOpen} onClose={closeRun} title="Run workflow">
         <Field label="Input text (optional)" htmlFor="wf-input" hint="Passed to the trigger node. Leave empty to use its sample input.">
           <Textarea id="wf-input" rows={5} value={runInput} onChange={(e) => setRunInput(e.target.value)} />
         </Field>
-        <p className="mt-3 text-xs text-slate-500">LLM nodes make real, billable API calls when an Anthropic key is configured.</p>
+        <div className="mt-4" aria-live="polite">
+          {estError ? (
+            <p role="alert" className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{estError}</p>
+          ) : !est ? (
+            <Skeleton className="h-16" />
+          ) : est.problems.length > 0 ? (
+            <div role="alert" className="space-y-1 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{est.problems.map((p) => <p key={p}>{p}</p>)}</div>
+          ) : est.steps.length === 0 ? (
+            <p className="text-xs text-slate-500">This workflow doesn’t generate media, so it costs no Higgsfield credits. LLM nodes make small, billable Claude calls when an Anthropic key is configured.</p>
+          ) : (
+            <div className="space-y-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4">
+              <p className="text-sm font-medium text-amber-900 dark:text-amber-100">This run spends Higgsfield credits.</p>
+              <ul className="space-y-1 text-sm">
+                {est.steps.map((s) => (
+                  <li key={s.nodeId} className="flex justify-between gap-3"><span className="truncate">{s.label} <span className="text-slate-500">· {s.items} item{s.items === 1 ? '' : 's'}{s.note ? ` (${s.note})` : ''}</span></span><span className="tabular-nums">{s.costUsd === null ? 'no price' : usd(s.costUsd)}</span></li>
+                ))}
+              </ul>
+              <div className="flex items-end justify-between gap-3 border-t border-amber-500/30 pt-2">
+                <span className="text-xs text-slate-500">{est.upTo ? 'At most, if every item is generated.' : 'Estimated from Higgsfield list prices.'}{est.unpriced && ' Some steps have no known price and count as $0.'}</span>
+                <span className="text-2xl font-semibold tabular-nums">{usd(est.totalUsd)}</span>
+              </div>
+              {est.budget && est.budget.budgetUsd > 0 && <p className="text-xs text-slate-500">Project budget {usd(est.budget.budgetUsd)} · {usd(est.budget.leftUsd ?? 0)} left</p>}
+            </div>
+          )}
+        </div>
         <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" onClick={() => setRunOpen(false)}>Cancel</Button>
-          <Button variant="primary" loading={starting} onClick={startRun}>
-            <Play className="h-4 w-4" aria-hidden /> {dirty ? 'Save & run' : 'Run'}
+          <Button variant="ghost" onClick={closeRun}>Cancel</Button>
+          <Button variant="primary" loading={starting} disabled={!est || est.problems.length > 0} onClick={() => void startRun()}>
+            <Play className="h-4 w-4" aria-hidden /> {est && est.steps.length > 0 ? `Run for ${est.upTo ? 'up to ' : ''}${usd(est.totalUsd)}` : 'Run'}
           </Button>
         </div>
       </Modal>
@@ -476,7 +525,7 @@ function Builder({ initial }: { initial: Workflow }) {
   );
 }
 
-function Inspector({ node, models, studioCatalog, disabled, onChange, onDelete }: { node: Node<NData>; models: ModelInfo[]; studioCatalog: StudioCatalog | null; disabled: boolean; onChange: (p: Partial<NData>) => void; onDelete: () => void }) {
+function Inspector({ node, models, studioCatalog, inProject, disabled, onChange, onDelete }: { node: Node<NData>; models: ModelInfo[]; studioCatalog: StudioCatalog | null; inProject: boolean; disabled: boolean; onChange: (p: Partial<NData>) => void; onDelete: () => void }) {
   const d = node.data;
   const t = node.type as NodeType;
   const model = models.find((m) => m.id === d.model);
@@ -493,14 +542,38 @@ function Inspector({ node, models, studioCatalog, disabled, onChange, onDelete }
               <option value="manual">Manual / API input</option>
               <option value="schedule">Scheduled</option>
               <option value="higgsfield">Recent Studio generations</option>
+              {inProject && <option value="project">Project cards</option>}
             </Select>
           </Field>
+          {d.source === 'project' && (
+            <>
+              <fieldset>
+                <legend className="mb-1.5 text-xs font-medium uppercase tracking-wider text-slate-400">Cards with status</legend>
+                <div className="flex flex-wrap gap-2">
+                  {['draft', 'ready', 'rejected', 'review', 'approved'].map((s) => {
+                    const on = (d.statuses ?? ['draft', 'ready', 'rejected']).includes(s);
+                    return (
+                      <label key={s} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-2 py-1 text-xs capitalize">
+                        <input type="checkbox" className="accent-cyan-500" disabled={disabled} checked={on} onChange={(e) => {
+                          const cur: string[] = d.statuses ?? ['draft', 'ready', 'rejected'];
+                          onChange({ statuses: e.target.checked ? [...cur, s] : cur.filter((x) => x !== s) });
+                        }} />
+                        {s}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+              <Field label="Only this scene or concept (optional)" htmlFor="i-pgroup"><Input id="i-pgroup" disabled={disabled} value={d.group ?? ''} placeholder="Ep 1 · Scene 1" onChange={(e) => onChange({ group: e.target.value })} /></Field>
+              <p className="text-xs text-slate-500">Outputs this project’s matching board cards as a list, for a For each node to render.</p>
+            </>
+          )}
           {d.source === 'schedule' && (
             <Field label="Every (minutes)" htmlFor="i-int" hint="Runs only while the workflow status is Active.">
               <Input id="i-int" type="number" min={1} disabled={disabled} value={d.intervalMinutes ?? 60} onChange={(e) => onChange({ intervalMinutes: Math.max(1, Number(e.target.value) || 1) })} />
             </Field>
           )}
-          {d.source !== 'higgsfield' && (
+          {d.source !== 'higgsfield' && d.source !== 'project' && (
             <Field label="Sample input" htmlFor="i-sample" hint="Used when a run is started without input.">
               <Textarea id="i-sample" rows={3} disabled={disabled} value={d.sampleInput ?? ''} onChange={(e) => onChange({ sampleInput: e.target.value })} />
             </Field>
@@ -552,6 +625,40 @@ function Inspector({ node, models, studioCatalog, disabled, onChange, onDelete }
             </Field>
           )}
           <p className="text-xs text-slate-500">Other settings use each model’s defaults. Results are saved to the media timeline and passed on as <code>{'{ assets: [{ url, type }] }'}</code>.</p>
+        </>
+      )}
+
+      {t === 'foreach' && (
+        <>
+          <Field label="For each item, generate…" htmlFor="i-fmode">
+            <Select id="i-fmode" disabled={disabled} value={d.mode ?? 'cards'} onChange={(e) => onChange({ mode: e.target.value })}>
+              <option value="cards">The board card itself (its own model and settings)</option>
+              <option value="prompt">From a prompt template (one model for all)</option>
+            </Select>
+          </Field>
+          {(d.mode ?? 'cards') === 'cards' ? (
+            <p className="text-xs text-slate-500">Takes a list of board cards (from a Project cards trigger) and renders each with the model, settings and inputs set on the card. Each card moves to “review” when it’s done.</p>
+          ) : (
+            <>
+              <Field label="Model" htmlFor="i-fmodel">
+                <Select id="i-fmodel" disabled={disabled} value={d.model ?? ''} onChange={(e) => onChange({ model: e.target.value, settings: {} })}>
+                  <option value="" disabled>Choose a model…</option>
+                  {studioCatalog?.models.map((m) => <option key={m.id} value={m.id}>{m.label} ({m.surface})</option>)}
+                </Select>
+              </Field>
+              <Field label="Prompt template" htmlFor="i-fprompt" hint={<>Use <code>{'{{item}}'}</code> (or <code>{'{{item.prompt}}'}</code> for list items that are objects), <code>{'{{index}}'}</code>, and <code>{'{{project.brief.visualStyle}}'}</code>.</>}>
+                <Textarea id="i-fprompt" rows={4} disabled={disabled} value={d.prompt ?? ''} onChange={(e) => onChange({ prompt: e.target.value })} />
+              </Field>
+              {studioCatalog?.models.find((m) => m.id === d.model && m.modes.some((md) => md.media.some((i) => i.role === 'start'))) && (
+                <Field label="Start frame URL (optional)" htmlFor="i-fstart"><Input id="i-fstart" disabled={disabled} value={d.startUrl ?? ''} placeholder="https://… or {{item.imageUrl}}" onChange={(e) => onChange({ startUrl: e.target.value })} /></Field>
+              )}
+            </>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Max items" htmlFor="i-fmax" hint="Safety limit, 1–50"><Input id="i-fmax" type="number" min={1} max={50} disabled={disabled} value={d.maxItems ?? 20} onChange={(e) => onChange({ maxItems: Math.min(50, Math.max(1, Number(e.target.value) || 1)) })} /></Field>
+            <Field label="At a time" htmlFor="i-fconc" hint="1–4"><Input id="i-fconc" type="number" min={1} max={4} disabled={disabled} value={d.concurrency ?? 2} onChange={(e) => onChange({ concurrency: Math.min(4, Math.max(1, Number(e.target.value) || 1)) })} /></Field>
+          </div>
+          <p className="text-xs text-slate-500">The list is a JSON array or one item per line. An item that fails doesn’t stop the others. This step spends money per item: you’ll see the total before the run starts.</p>
         </>
       )}
 

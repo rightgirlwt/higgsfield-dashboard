@@ -35,8 +35,8 @@ Other commands: `npm test` (backend tests) · `npm run typecheck` · `npm run bu
 |---|---|
 | **Overview** | KPI cards with period‑over‑period deltas, monthly budget bar, stacked spend chart, usage breakdown by model / workflow / provider, recent runs, live status, CSV + PDF export |
 | **Studio** | A Higgsfield-style playground. 19 real Higgsfield models, each with its documented modes (text → image/video, image → video, reference → video, edit, motion control): Soul 2, Grok Imagine, Ideogram 4, Recraft 4.1, Qwen Image 3, Z-Image Turbo, Kling 3.0 (Standard/Pro/4K/Turbo/Motion Control), Seedance 2.5 and 2.0, Wan 3.0, MiniMax H3, Genjutsu Motion Transfer, LTX 2.5. Inputs: **upload from your computer**, pick from your library, or paste a link, for start/end frames, reference images, video and audio. **Characters (Soul ID)**: train a character from photos and reuse it in Soul 2. "Animate" any generated image into a video. Live progress, gallery, "use this prompt". Results land in the media timeline, count as spend, show in Monitoring, and are available as a **Generate** node in workflows |
-| **Studio** | A Higgsfield-style playground. 19 real Higgsfield models, each with its documented modes (text → image/video, image → video, reference → video, edit, motion control): Soul 2, Grok Imagine, Ideogram 4, Recraft 4.1, Qwen Image 3, Z-Image Turbo, Kling 3.0 (Standard/Pro/4K/Turbo/Motion Control), Seedance 2.5 and 2.0, Wan 3.0, MiniMax H3, Genjutsu Motion Transfer, LTX 2.5. Inputs: **upload from your computer**, pick from your library, or paste a link, for start/end frames, reference images, video and audio. **Characters (Soul ID)**: train a character from photos and reuse it in Soul 2. "Animate" any generated image into a video. Live progress, gallery, "use this prompt". Results land in the media timeline, count as spend, show in Monitoring, and are available as a **Generate** node in workflows |
-| **Workflows** | React Flow editor with Trigger / LLM / Transform / Action / Output nodes, connection rules (no cycles, no inputs into triggers…), live validation, save to backend, run with live per‑node status + logs, run history, template library, scheduled triggers |
+| **Projects** | Make a **micro drama** or an **ad campaign** in one place. Each project has a brief (story bible or brand kit), a **board** of shots or ad units grouped by scene or concept, shared **assets** (characters with Soul IDs, products, logos), a **budget**, and a **chat with Claude (the Director)** that writes the brief, drafts the board, picks models, prices everything and builds workflows. Review the cost, approve takes, and **export** the script, a shot list and the approved clips as a ZIP. Ads add a **variant matrix** (hooks × formats) with the total cost shown before anything is created |
+| **Workflows** | React Flow editor with Trigger / LLM / **For each** / Generate / Transform / Action / Output nodes, a **Project cards** trigger, `{{project.*}}` variables, **a cost estimate and confirmation before any run that spends money**, connection rules (no cycles, no inputs into triggers…), live validation, save to backend, run with live per‑node status + logs, run history, template library, scheduled triggers |
 | **Media** | Day‑grouped timeline with infinite scroll (keyset pagination), filters (date range, type, tag, workflow, text), accessible lightbox with video player and keyboard nav, CSV/JSON export, add by URL or upload to S3 |
 | **Monitoring** | Live Socket.IO log stream with level/type/status/workflow/text filters + pause, active jobs, alerts, health/latency/queue tiles, rolling performance chart |
 | **Settings** | Encrypted API keys, model defaults, S3 config, team & roles, budget + alert threshold, data export |
@@ -84,7 +84,7 @@ Production checklist: managed Postgres + backups · `SECRETS_ENCRYPTION_KEY` sto
 
 ## Status & honest limits
 
-Verified in development: backend typecheck + **57 automated tests** (auth/RBAC, CORS, queue + workflow engine, media pagination/filters, budgets, secrets encryption, exports…), production build of the frontend, and a manual run‑through of the UI against the live backend (overview, prompt run, workflow run with live node status, monitoring, media + lightbox, tablet layout).
+Verified in development: backend typecheck + **93 automated tests** (auth/RBAC, CORS, queue + workflow engine, media pagination/filters, budgets, secrets encryption, exports…), production build of the frontend, and a manual run‑through of the UI against the live backend (overview, prompt run, workflow run with live node status, monitoring, media + lightbox, tablet layout).
 
 **Not verified against live third‑party services** (no credentials were available when this was built), so test these before relying on them:
 
@@ -100,8 +100,22 @@ Known gaps / design notes:
 - **Job queue is in‑process** (persisted run state, bounded concurrency). Queued/running jobs are marked failed if the server restarts. Run it as one replica, or swap `services/jobs.ts` for BullMQ/pg‑boss to scale out.
 - **No email/Slack alert delivery** – alerts appear in‑app (bell, Monitoring) only.
 - **Search is substring (`ILIKE`)**, not full‑text.
-- **No SSO/SCIM, audit log, or per‑project permissions**; "projects" exist in the schema but aren't surfaced in the UI.
+- **No SSO/SCIM, audit log, or per‑project permissions**: everyone in an organisation can see all of its projects.
 - Running (not queued) jobs can't be cancelled.
+
+## Projects, the Director and spending safeguards
+
+A **project** holds one piece of work (a micro drama or an ad campaign). The chat panel is a Claude assistant (the **Director**) that can read the project and use tools to change it: write the brief, add and edit board cards, choose models from the real Higgsfield catalog, price a set of cards, create ad variants, save workflows and note which characters or products you still need. It is told to keep prompts self-contained and to repeat character and style details, because every generation starts from scratch.
+
+**It can never spend Higgsfield credits.** It has no generate tool. When a set of cards is ready it can mark them "ready to approve"; only a person pressing **Generate** in the cost dialog starts anything. Details:
+
+- The cost dialog lists every item with its model, duration and price, the total, and the project budget left. The server **re-prices** on submit and refuses (409) if the cost went up since you looked, and refuses (402) if the batch would exceed the project budget. Only float rounding is tolerated.
+- Workflows that generate media show the same estimate in the Run dialog and need the shown total to be confirmed (the API returns 409 `cost_confirmation_required` otherwise). A for-each step is priced per item; when the list length isn't known up front the figure is a stated ceiling.
+- **Scheduled runs never spend.** A scheduled workflow that would generate media is skipped, and an alert tells you to run it by hand.
+- The Director's own Claude usage is billed to the project too (shown as "chat" in the spend card).
+- Export fetches approved clips only from public https addresses, never the server's own network, and lists anything it couldn't download in `MISSING.txt`.
+
+Verified live: the Director was run against a real Anthropic key (it filled a story bible, added four shots on the cheapest video model, priced them at $0.765, marked them ready, and generated nothing; the turn cost about $0.09 with Sonnet 5.5). **Not run live**: generating a whole board or a for-each workflow against real Higgsfield (the logic is covered by tests against a fake Higgsfield server and the simulated mode), ZIP export of real Higgsfield URLs, and Higgsfield's Marketing Studio / Ads Studio, which this app does not use. Ad variants are produced with the same Studio models as everything else.
 
 ## Design & theming
 
