@@ -34,7 +34,8 @@ export async function snapshot(orgId: string): Promise<MonitoringSnapshot> {
     ),
     db.query<{ avg: number | null; p95: number | null }>(
       `SELECT AVG(latency_ms)::float8 AS avg, percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::float8 AS p95
-       FROM job_runs WHERE org_id=$1 AND status='completed' AND finished_at >= $2 AND latency_ms IS NOT NULL`,
+       FROM job_runs WHERE org_id=$1 AND status='completed' AND finished_at >= $2 AND latency_ms IS NOT NULL
+         AND kind <> 'generation'`, // image/video renders take minutes by design; they aren't API response time
       [orgId, hourAgo],
     ),
     db.query<{ queued: number; running: number }>(
