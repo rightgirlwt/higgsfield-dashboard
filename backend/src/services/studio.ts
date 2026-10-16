@@ -104,7 +104,8 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
     }
   }
   if (pending.length === 0) throw new Error(failures[0] ?? 'Nothing was submitted');
-  await log('info', `Submitted ${pending.length} request${pending.length > 1 ? 's' : ''} to ${model.label} (${mode.label})`);
+  // Full ids are logged so a request we stop waiting for can still be looked up (outputs stay available for 7 days).
+  await log('info', `Submitted ${pending.length} request${pending.length > 1 ? 's' : ''} to ${model.label} (${mode.label}). Higgsfield request id${pending.length > 1 ? 's' : ''}: ${pending.map((r) => r.id).join(', ')}`);
 
   const adminPrice = (await getPrices(orgId))[model.id] ?? null;
   const unit = unitPrice(mode, settings, adminPrice);
@@ -168,8 +169,8 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
           r.misses++;
           const msg = err instanceof Error ? err.message : String(err);
           if (r.misses >= 3) {
-            failures.push(`Lost contact with Higgsfield: ${msg}`);
-            await log('error', `Request ${r.id.slice(0, 8)}: lost contact (${msg})`);
+            failures.push(`Lost contact with Higgsfield: ${msg}. The request may still finish: its id is ${r.id}`);
+            await log('error', `Request ${r.id}: lost contact (${msg})`);
           } else {
             await log('warn', `Status check failed (${r.misses}/3): ${msg}`);
             stillLive.push(r);
@@ -180,8 +181,10 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
     live = stillLive;
     if (live.length && Date.now() > deadline) {
       for (const r of live) {
-        failures.push('Timed out waiting for the platform');
-        await log('error', `Request ${r.id.slice(0, 8)} timed out`);
+        const mins = Math.round(config.studioDeadlineMs / 60_000);
+        // Higgsfield may still finish this and charge for it, so say how to find it instead of just giving up.
+        failures.push(`Timed out waiting for the platform after ${mins} minutes. It may still finish at Higgsfield (request id ${r.id}); check your Higgsfield console usage before trying again`);
+        await log('error', `Request ${r.id} timed out after ${mins} minutes and may still complete at Higgsfield`);
       }
       live = [];
     }

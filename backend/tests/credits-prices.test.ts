@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
+import { config } from '../src/config';
 import { setDb, setIo } from '../src/ctx';
 import { createDb, type Db } from '../src/db';
 import { migrate } from '../src/db/migrations';
@@ -42,6 +43,8 @@ const hf = {
   estimateUsd: null as number | null,
   mode: 'price' as 'price' | 'description',
   estimates: [] as { url: string; body: any }[],
+  /** Simulates Higgsfield being slow: status never leaves in_progress. */
+  stuck: false,
 };
 
 beforeAll(async () => {
@@ -60,6 +63,7 @@ beforeAll(async () => {
       }
       if (req.method === 'POST') return send(200, { request_id: `req-${Math.random().toString(36).slice(2)}`, status: 'queued' });
       const m = /^\/requests\/([^/]+)\/status$/.exec(req.url!);
+      if (m && hf.stuck) return send(200, { status: 'in_progress', request_id: m[1] });
       if (m) return send(200, { status: 'completed', request_id: m[1], video: { url: `https://cdn.test/${m[1]}.mp4` } });
       send(404, { detail: 'not found' });
     });
@@ -289,5 +293,46 @@ describe('credits', () => {
     expect(of(await credits(), 'claude')).toMatchObject({ startingUsd: 50, usedSinceUsd: 0, remainingUsd: 50, low: false });
     expect((await call('DELETE', '/settings/credits/claude', { as: 'admin' })).status).toBe(204);
     expect(of(await credits(), 'claude').set).toBe(false);
+  });
+});
+
+describe('when Higgsfield is slow', () => {
+  it('waits up to 30 minutes by default', () => {
+    expect(config.studioDeadlineMs).toBe(1_800_000);
+  });
+
+  it('gives up with the full request id and a clear warning that it may still finish and charge', async () => {
+    const saved = config.studioDeadlineMs;
+    config.studioDeadlineMs = 200;
+    hf.stuck = true;
+    try {
+      const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'z-image-turbo', prompt: 'a lamp' } });
+      expect(g.status).toBe(202);
+      const done = await waitRun(g.json.run.id);
+      expect(done.run.status).toBe('failed');
+      expect(done.run.error).toMatch(/Timed out waiting for the platform after 0 minutes\. It may still finish at Higgsfield \(request id req-[a-z0-9]+\); check your Higgsfield console usage before trying again/);
+      const ids = (done.logs.find((l: any) => /Higgsfield request id/.test(l.message))?.message as string).match(/req-[a-z0-9]+/)![0];
+      expect(done.run.error).toContain(ids); // the id in the error is the same one logged at submit time
+      expect(done.logs.map((l: any) => l.message).join('\n')).toMatch(/timed out after 0 minutes and may still complete/);
+      expect(done.run.costUsd).toBe(0); // nothing is recorded as spent for work we never received
+    } finally {
+      hf.stuck = false;
+      config.studioDeadlineMs = saved;
+    }
+  });
+
+  it('a slow request that does finish inside the wait still succeeds', async () => {
+    const saved = config.studioDeadlineMs;
+    config.studioDeadlineMs = 5000;
+    hf.stuck = true;
+    setTimeout(() => (hf.stuck = false), 300); // Higgsfield recovers
+    try {
+      const g = await call('POST', '/studio/generate', { as: 'user', body: { modelId: 'z-image-turbo', prompt: 'a lamp' } });
+      const done = await waitRun(g.json.run.id);
+      expect(done.run.status).toBe('completed');
+    } finally {
+      hf.stuck = false;
+      config.studioDeadlineMs = saved;
+    }
   });
 });

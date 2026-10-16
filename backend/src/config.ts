@@ -44,7 +44,8 @@ export const config = {
   generationConcurrency: Number(env.GENERATION_CONCURRENCY ?? 8),
   /** How often to ask Higgsfield for status, and how long to wait before giving up. */
   studioPollMs: Number(env.STUDIO_POLL_MS ?? (nodeEnv === 'test' ? 15 : 4000)),
-  studioDeadlineMs: Number(env.STUDIO_DEADLINE_MS ?? 600_000),
+  // Seedance clips can take 6+ minutes and sometimes far longer when Higgsfield is busy, so wait up to 30 minutes before giving up.
+  studioDeadlineMs: Number(env.STUDIO_DEADLINE_MS ?? 1_800_000),
   logLevel: env.LOG_LEVEL ?? (isProd ? 'info' : 'debug'),
 };
 
