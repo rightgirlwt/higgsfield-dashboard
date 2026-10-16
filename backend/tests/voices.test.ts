@@ -26,7 +26,7 @@ const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WA
 
 /** Stand-ins: ElevenLabs (voices, speech, dialogue) and Higgsfield (upload-url only). */
 const el = { server: null as http.Server | null, url: '', seen: [] as { method: string; url: string; key: string | undefined; body: any }[], reject: false };
-const hf = { server: null as http.Server | null, url: '', puts: [] as { url: string; bytes: number; type: string | null }[] };
+const hf = { server: null as http.Server | null, url: '', puts: [] as { url: string; bytes: number; type: string | null; head?: string }[] };
 const realFetch = globalThis.fetch;
 const claude = { server: null as http.Server | null, replies: [] as string[], requests: [] as any[] };
 
@@ -92,7 +92,7 @@ beforeAll(async () => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input.url ?? String(input);
     if (url.startsWith('https://upload.test/')) {
-      hf.puts.push({ url, bytes: init?.body?.byteLength ?? 0, type: init?.headers?.['Content-Type'] ?? null });
+      hf.puts.push({ url, bytes: init?.body?.byteLength ?? 0, type: init?.headers?.['Content-Type'] ?? null, head: init?.body ? Buffer.from(init.body.subarray(0, 4)).toString() : undefined });
       return new Response(null, { status: 200 });
     }
     return realFetch(input, init);
@@ -172,7 +172,7 @@ describe('speaking a line', () => {
     expect(r.status).toBe(201);
     expect(r.json).toEqual({ url: 'https://cdn.test/in/line-1.wav', bytes: WAV.length, format: 'wav_24000', model: 'eleven_v4', speakers: 1, spokenText: 'I told you not to come here.', autoTags: { enabled: false, linesTagged: 0 } });
     expect(el.seen[0]).toMatchObject({ method: 'POST', url: '/v1/text-to-speech/marcusvoice0001?output_format=wav_24000', body: { text: 'I told you not to come here.', model_id: 'eleven_v4' } });
-    expect(hf.puts).toEqual([{ url: 'https://upload.test/put/line-1', bytes: WAV.length, type: 'audio/wav' }]);
+    expect(hf.puts).toMatchObject([{ url: 'https://upload.test/put/line-1', bytes: WAV.length, type: 'audio/wav' }]);
   });
 
   it('speaks a multi-voice scene in one request', async () => {
@@ -269,5 +269,71 @@ describe('auto tags for Eleven v4', () => {
     const r = await speech({ text: 'Plain.', dryRun: true, autoTags: false });
     expect(r.json).toMatchObject({ spokenText: 'Plain.', autoTags: { enabled: false, linesTagged: 0 } });
     expect(claude.requests).toHaveLength(0);
+  });
+});
+
+describe('uploading audio files (MP3, M4A... are converted to WAV)', () => {
+  const upload = async (body: Uint8Array, type: string) => {
+    const res = await realFetch(base + '/api/studio/uploads?filename=line.' + type.split('/')[1], { method: 'POST', headers: { 'content-type': type, authorization: `Bearer ${tokens.user}` }, body });
+    return { status: res.status, json: await res.json() };
+  };
+  const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
+  const makeMp3 = async () => {
+    const { execFileSync } = await import('node:child_process');
+    return new Uint8Array(execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-f', 'mp3', 'pipe:1'], { maxBuffer: 5_000_000 }));
+  };
+  let haveFfmpeg = true;
+  beforeAll(async () => {
+    try {
+      await makeMp3();
+    } catch {
+      haveFfmpeg = false;
+    }
+  });
+
+  it('converts an MP3 to WAV before hosting it on Higgsfield', async (ctx) => {
+    if (!haveFfmpeg) return ctx.skip();
+    const mp3 = await makeMp3();
+    expect([...mp3.subarray(0, 3)]).not.toEqual([0x52, 0x49, 0x46]); // really not a WAV to begin with
+    const r = await upload(mp3, 'audio/mpeg');
+    expect(r.status).toBe(201);
+    expect(r.json).toMatchObject({ kind: 'audio', url: 'https://cdn.test/in/line-1.wav' });
+    expect(hf.puts).toHaveLength(1);
+    expect(hf.puts[0].type).toBe('audio/wav');
+    expect(hf.puts[0].head).toBe('RIFF'); // what Higgsfield received is a WAV
+    expect(hf.puts[0].bytes).toBeGreaterThan(80_000); // about 1 second of 44.1 kHz mono 16-bit
+  });
+
+  it('still takes WAV files as they are', async () => {
+    const r = await upload(new Uint8Array(WAV), 'audio/wav');
+    expect(r.status).toBe(201);
+    expect(hf.puts[0].bytes).toBe(WAV.length); // not re-encoded
+  });
+
+  it('refuses a file that is not really audio, with a plain message', async (ctx) => {
+    if (!haveFfmpeg) return ctx.skip();
+    const r = await upload(new Uint8Array(Buffer.from('this is definitely not audio '.repeat(50))), 'audio/mpeg');
+    expect(r.status).toBe(400);
+    expect(r.json.error.message).toMatch(/could not be read as audio/);
+    expect(hf.puts).toHaveLength(0);
+  });
+
+  it('says so plainly when ffmpeg is not installed', async () => {
+    const saved = process.env.FFMPEG_PATH;
+    process.env.FFMPEG_PATH = 'definitely-not-ffmpeg-xyz';
+    try {
+      const r = await upload(new Uint8Array(Buffer.alloc(500, 1)), 'audio/mp4');
+      expect(r.status).toBe(400);
+      expect(r.json.error).toMatchObject({ code: 'ffmpeg_missing' });
+      expect(r.json.error.message).toMatch(/Upload a WAV file instead/);
+    } finally {
+      if (saved === undefined) delete process.env.FFMPEG_PATH;
+      else process.env.FFMPEG_PATH = saved;
+    }
+  });
+
+  it('still rejects types it cannot use', async () => {
+    const r = await upload(new Uint8Array(10), 'application/pdf');
+    expect(r.status).toBeGreaterThanOrEqual(400);
   });
 });

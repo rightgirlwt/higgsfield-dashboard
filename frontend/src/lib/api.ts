@@ -67,11 +67,11 @@ export const api = {
   del: <T = void>(path: string) => json<T>('DELETE', path),
 
   /** Upload a raw file body (the server hosts it on Higgsfield and returns a public URL). */
-  async upload<T>(path: string, file: File): Promise<T> {
+  async upload<T>(path: string, file: File, contentType?: string): Promise<T> {
     const token = await tokenProvider();
     let res: Response;
     try {
-      res = await fetch(`${BASE}/api${path}`, { method: 'POST', headers: { 'Content-Type': file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: file });
+      res = await fetch(`${BASE}/api${path}`, { method: 'POST', headers: { 'Content-Type': contentType || file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: file });
     } catch {
       throw new ApiError(0, 'Cannot reach the server. Check that the backend is running.', 'network');
     }

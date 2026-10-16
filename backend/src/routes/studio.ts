@@ -4,6 +4,7 @@ import { badRequest, HttpError, notFound, wrap } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { createCharacter, getBaseUrl, getCharacter, getHfConfig, HiggsfieldError, listCharacters, uploadFile, UPLOAD_TYPES } from '../services/higgsfield';
 import { createRun, generationQueue } from '../services/jobs';
+import { CONVERTIBLE_AUDIO, toWav } from '../services/audioConvert';
 import { addAudioTags } from '../services/voiceTags';
 import { dialogue, DEFAULT_MODEL, DEFAULT_WAV, ElevenLabsError, isVoiceId, listVoices, speak, WAV_FORMATS } from '../services/elevenlabs';
 import { getSecret } from '../services/secrets';
@@ -83,21 +84,29 @@ studio.post(
 );
 
 // ---- uploads: host a local image/video/audio file on Higgsfield so it can be a generation input ---------
-const rawUpload = express.raw({ type: (req) => !!UPLOAD_TYPES[String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()], limit: '100mb' });
+const typeOf = (req: { headers: Record<string, unknown> }) => String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+const rawUpload = express.raw({ type: (req) => !!UPLOAD_TYPES[typeOf(req)] || CONVERTIBLE_AUDIO.has(typeOf(req)), limit: '100mb' });
 
 studio.post(
   '/uploads',
   rawUpload,
   wrap(async (req, res) => {
-    const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-    const spec = UPLOAD_TYPES[contentType];
-    if (!spec) throw badRequest('Unsupported file type. Use JPG, PNG, WebP or GIF images, MP4 video, or WAV audio.');
-    const body = req.body as Buffer;
+    let contentType = typeOf(req);
+    // MP3, M4A and similar audio is converted to WAV first, because that is the only audio format Higgsfield accepts.
+    const convert = CONVERTIBLE_AUDIO.has(contentType);
+    const spec = convert ? UPLOAD_TYPES['audio/wav'] : UPLOAD_TYPES[contentType];
+    if (!spec) throw badRequest('Unsupported file type. Use JPG, PNG, WebP or GIF images, MP4 video, or WAV, MP3 or M4A audio.');
+    let body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) throw badRequest('The file is empty');
     if (body.length > spec.maxBytes) throw new HttpError(413, `That ${spec.kind} is too large (limit ${Math.round(spec.maxBytes / 1024 / 1024)} MB)`, 'too_large');
     const org = req.user!.orgId;
     const cfg = await getHfConfig(org);
     if (!cfg) throw badRequest('Connect Higgsfield (Settings → API keys and Settings → Higgsfield) before uploading reference files.');
+    if (convert) {
+      body = await toWav(body);
+      contentType = 'audio/wav';
+      if (body.length > spec.maxBytes) throw new HttpError(413, 'That audio is too long once converted (the limit is about 5 minutes). Trim it and try again.', 'too_large');
+    }
     let url: string;
     try {
       url = await uploadFile(cfg, body, contentType);

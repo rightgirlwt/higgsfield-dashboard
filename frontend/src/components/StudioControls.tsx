@@ -14,8 +14,13 @@ export const ACCEPT: Record<MediaRole, string> = {
   end: 'image/jpeg,image/png,image/webp,image/gif',
   reference: 'image/jpeg,image/png,image/webp,image/gif',
   video: 'video/mp4',
-  audio: 'audio/wav',
+  // MP3 and M4A are converted to WAV on upload (Higgsfield only takes WAV).
+  audio: 'audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/flac,.wav,.mp3,.m4a,.aac,.ogg,.flac',
 };
+
+const EXT_TYPE: Record<string, string> = { wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', mp4: 'video/mp4' };
+/** Some systems give files no type; fall back to the extension so the server knows what it is. */
+const fileType = (f: File) => f.type || EXT_TYPE[f.name.split('.').pop()?.toLowerCase() ?? ''] || '';
 export const kindOf = (role: MediaRole): 'image' | 'video' | 'audio' => (role === 'video' ? 'video' : role === 'audio' ? 'audio' : 'image');
 
 export function defaultsFor(mode: StudioMode): Settings {
@@ -90,7 +95,7 @@ export function MediaSlot({ input, urls, onChange, onPick, disabled, connected }
     const added: string[] = [];
     try {
       for (const f of [...files].slice(0, room)) {
-        const r = await api.upload<{ url: string }>(`/studio/uploads?filename=${encodeURIComponent(f.name)}`, f);
+        const r = await api.upload<{ url: string }>(`/studio/uploads?filename=${encodeURIComponent(f.name)}`, f, fileType(f));
         added.push(r.url);
       }
     } catch (e) {
@@ -129,6 +134,7 @@ export function MediaSlot({ input, urls, onChange, onPick, disabled, connected }
         <Input aria-label={`${input.label}: paste a public URL`} type="url" placeholder="…or paste a public https:// link" value={draft} onChange={(e) => setDraft(e.target.value)} disabled={disabled || room <= 0} />
         <Button type="submit" disabled={disabled || room <= 0 || !draft.trim()}>Add</Button>
       </form>
+      {kind === 'audio' && <p className="mt-1.5 text-xs text-slate-500">WAV, MP3 or M4A. Other formats are converted to WAV for you.</p>}
       {input.hint && <p className="mt-1.5 text-xs text-slate-500">{input.hint}</p>}
     </div>
   );
