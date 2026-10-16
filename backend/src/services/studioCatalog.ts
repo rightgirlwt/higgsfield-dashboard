@@ -530,9 +530,12 @@ export const LIST_PRICES: Record<string, ListPrice> = {
   'kling-video/v3.0-turbo/image-to-video': vid$(0.0952, 0.119, { byResolution: { '720p': 0.0952, '1080p': 0.119 }, promoEnds: PROMO }),
   'kling-video/v3/motion-control/std': vid$(0.1071, 0.1071, { promoEnds: PROMO, assumedSeconds: 5 }),
   'kling-video/v3/motion-control/pro': vid$(0.1428, 0.1428, { promoEnds: PROMO, assumedSeconds: 5 }),
-  'bytedance/seedance-2.5/text-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO }),
-  'bytedance/seedance-2.5/image-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO }),
-  'bytedance/seedance-2.5/reference-to-video': vid$(0.1728, 0.9553, { promoEnds: PROMO }),
+  // Seedance 2.5 is priced by resolution. Higgsfield's own text (checked 2026-10-16): about $0.2056/s at 480p, $0.4622/s at 720p and
+  // $1.1372/s at 1080p, before discounts. The saved 480p and 1080p prices are those rates less the current promotion (30% off text and
+  // image modes, 16% off reference mode), so 720p is the same discount applied to $0.4622. Refresh after the promotion ends.
+  'bytedance/seedance-2.5/text-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO, byResolution: { '480p': 0.144, '720p': 0.3235, '1080p': 0.7961 } }),
+  'bytedance/seedance-2.5/image-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO, byResolution: { '480p': 0.144, '720p': 0.3235, '1080p': 0.7961 } }),
+  'bytedance/seedance-2.5/reference-to-video': vid$(0.1728, 0.9553, { promoEnds: PROMO, byResolution: { '480p': 0.1728, '720p': 0.3882, '1080p': 0.9553 } }),
   'bytedance/seedance-2.0/text-to-video': vid$(0.1196, 1.322, { promoEnds: PROMO }),
   'bytedance/seedance-2.0/image-to-video': vid$(0.1196, 1.322, { promoEnds: PROMO }),
   'bytedance/seedance-2.0/reference-to-video': vid$(0.1435, 1.5864, { promoEnds: PROMO }),

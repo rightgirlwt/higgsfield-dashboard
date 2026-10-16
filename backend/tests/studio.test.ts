@@ -108,7 +108,9 @@ describe('studio catalog (data-driven)', () => {
     const soul = getStudioModel('soul-2')!.modes[0];
     expect(unitPrice(soul, { resolution: '1080p' }, null)).toEqual({ amount: 0.0057, precision: 'exact', basis: 'list' });
     const seed = getStudioModel('seedance-2-5')!.modes[0];
-    expect(unitPrice(seed, { resolution: '720p' }, null)).toEqual({ amount: 0.144, precision: 'from', basis: 'list' });
+    expect(unitPrice(seed, { resolution: '480p' }, null)).toEqual({ amount: 0.144, precision: 'exact', basis: 'list' });
+    expect(unitPrice(seed, { resolution: '720p' }, null)).toEqual({ amount: 0.3235, precision: 'exact', basis: 'list' }); // 720p costs more than 2x the 480p rate
+    expect(unitPrice(getStudioModel('seedance-2-5')!.modes[2], { resolution: '720p' }, null)).toEqual({ amount: 0.3882, precision: 'exact', basis: 'list' });
     expect(unitPrice(seed, {}, 0.5)).toEqual({ amount: 0.5, precision: 'exact', basis: 'admin' });
     const motion = getStudioModel('kling-3-motion-std')!;
     expect(billedSeconds(motion, motion.modes[0], {})).toBe(5); // billed by the input video's length: assumption
