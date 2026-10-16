@@ -35,6 +35,7 @@ export const config = {
   anthropicApiKey: env.ANTHROPIC_API_KEY ?? '',
   higgsfieldApiKey: env.HIGGSFIELD_API_KEY ?? '',
   higgsfieldApiBase: env.HIGGSFIELD_API_BASE ?? '',
+  elevenlabsApiKey: env.ELEVENLABS_API_KEY ?? '',
 
   secretsKey: env.SECRETS_ENCRYPTION_KEY ?? '',
   seedDemo: bool(env.SEED_DEMO_DATA, !isProd),

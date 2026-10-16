@@ -276,7 +276,7 @@ export interface MediaItem {
 }
 
 export interface SecretStatus {
-  name: 'anthropic' | 'higgsfield' | 's3_access_key_id' | 's3_secret_access_key';
+  name: 'anthropic' | 'higgsfield' | 'elevenlabs' | 's3_access_key_id' | 's3_secret_access_key';
   configured: boolean;
   source: 'stored' | 'environment' | 'none';
   last4: string | null;

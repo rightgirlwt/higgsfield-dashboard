@@ -4,6 +4,8 @@ import { badRequest, HttpError, notFound, wrap } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { createCharacter, getBaseUrl, getCharacter, getHfConfig, HiggsfieldError, listCharacters, uploadFile, UPLOAD_TYPES } from '../services/higgsfield';
 import { createRun, generationQueue } from '../services/jobs';
+import { dialogue, DEFAULT_WAV, ElevenLabsError, listVoices, speak, WAV_FORMATS } from '../services/elevenlabs';
+import { getSecret } from '../services/secrets';
 import { livePrice } from '../services/livePrice';
 import { getPrices, prepareGeneration, studioWork } from '../services/studio';
 import { PRICES_AS_OF, publicModel, STUDIO_MODELS, type MediaRole } from '../services/studioCatalog';
@@ -168,5 +170,73 @@ studio.get(
       if (e instanceof HiggsfieldError) throw new HttpError(e.status === 404 ? 404 : 502, e.message, 'upstream');
       throw e;
     }
+  }),
+);
+
+// ---- voices (ElevenLabs) -----------------------------------------------------------------------------------
+const elevenKey = async (org: string) => {
+  const key = await getSecret(org, 'elevenlabs');
+  if (!key) throw badRequest('Add your ElevenLabs API key in Settings → API keys first.');
+  return key;
+};
+const upstream = (e: unknown): never => {
+  if (e instanceof ElevenLabsError) throw new HttpError(e.status, e.message, 'upstream');
+  throw e;
+};
+
+/** Your ElevenLabs voices (cloned ones first). */
+studio.get(
+  '/voices',
+  wrap(async (req, res) => {
+    const key = await getSecret(req.user!.orgId, 'elevenlabs');
+    if (!key) return void res.json({ connected: false, voices: [] });
+    try {
+      const voices = await listVoices(key);
+      // Voices you made or were shared with you come before ElevenLabs' stock ones.
+      voices.sort((a, b) => Number(a.category === 'premade') - Number(b.category === 'premade') || a.name.localeCompare(b.name));
+      res.json({ connected: true, voices });
+    } catch (e) {
+      upstream(e);
+    }
+  }),
+);
+
+const speechBody = z.object({
+  format: z.enum(WAV_FORMATS).default(DEFAULT_WAV),
+  /** One speaker: { voiceId, text }. A scene: { lines: [{ voiceId, text }, ...] } (up to 10 different voices). */
+  voiceId: z.string().max(64).optional(),
+  text: z.string().trim().min(1).max(2000).optional(),
+  modelId: z.string().max(60).optional(),
+  lines: z.array(z.object({ voiceId: z.string().max(64), text: z.string().trim().min(1).max(2000) })).min(1).max(40).optional(),
+});
+
+/**
+ * Speaks a line (or a short multi-voice scene) and hosts the WAV on Higgsfield so it can be used as a generation's audio input.
+ * Spends ElevenLabs credits (not tracked in this dashboard yet).
+ */
+studio.post(
+  '/speech',
+  wrap(async (req, res) => {
+    const b = speechBody.parse(req.body);
+    const org = req.user!.orgId;
+    const single = b.voiceId && b.text;
+    if (!single && !b.lines) throw badRequest('Send either voiceId + text, or lines.');
+    if (b.lines && b.lines.reduce((n, l) => n + l.text.length, 0) > 2000) throw badRequest('A scene can be at most about 2,000 characters in total. Split it into several takes.');
+    const [key, hf] = await Promise.all([elevenKey(org), getHfConfig(org)]);
+    if (!hf) throw badRequest('Connect Higgsfield first: the audio is hosted there so video models can use it.');
+    let wav: Buffer;
+    try {
+      wav = single ? await speak(key, { voiceId: b.voiceId!, text: b.text!, modelId: b.modelId, format: b.format }) : await dialogue(key, { inputs: b.lines!, format: b.format });
+    } catch (e) {
+      return upstream(e);
+    }
+    let url: string;
+    try {
+      url = await uploadFile(hf, wav, 'audio/wav');
+    } catch (e) {
+      if (e instanceof HiggsfieldError) throw new HttpError(502, e.message, 'upstream');
+      throw e;
+    }
+    res.status(201).json({ url, bytes: wav.length, format: b.format, speakers: single ? 1 : new Set(b.lines!.map((l) => l.voiceId)).size });
   }),
 );

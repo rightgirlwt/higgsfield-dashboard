@@ -2,12 +2,13 @@ import { config } from '../config';
 import { getDb } from '../ctx';
 import { decryptSecret, encryptSecret, last4 } from '../lib/crypto';
 
-export const SECRET_NAMES = ['anthropic', 'higgsfield', 's3_access_key_id', 's3_secret_access_key'] as const;
+export const SECRET_NAMES = ['anthropic', 'higgsfield', 'elevenlabs', 's3_access_key_id', 's3_secret_access_key'] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
 const ENV_FALLBACK: Partial<Record<SecretName, string>> = {
   anthropic: config.anthropicApiKey,
   higgsfield: config.higgsfieldApiKey,
+  elevenlabs: config.elevenlabsApiKey,
 };
 
 export async function setSecret(orgId: string, name: SecretName, value: string): Promise<void> {

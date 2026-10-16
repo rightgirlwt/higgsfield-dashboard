@@ -61,6 +61,7 @@ export default function SettingsPage() {
 const SECRET_META: Record<SecretStatus['name'], { label: string; hint: string; group: 'ai' | 'storage' }> = {
   anthropic: { label: 'Anthropic (Claude) API key', hint: 'Used for prompt runs and workflow LLM nodes. Without it the app returns clearly-labelled simulated responses.', group: 'ai' },
   higgsfield: { label: 'Higgsfield API key', hint: 'Paste the whole key in the form id:secret. Studio needs this plus the API address on the Higgsfield tab.', group: 'ai' },
+  elevenlabs: { label: 'ElevenLabs API key', hint: 'For character voices: your ElevenLabs voices, spoken lines and voice changing. Without it, voice features are switched off.', group: 'ai' },
   s3_access_key_id: { label: 'S3 access key ID', hint: 'For direct media uploads to your bucket.', group: 'storage' },
   s3_secret_access_key: { label: 'S3 secret access key', hint: 'Stored encrypted; never shown again.', group: 'storage' },
 };
