@@ -20,6 +20,9 @@ export const WAV_FORMATS = ['wav_16000', 'wav_22050', 'wav_24000', 'wav_32000', 
 export type WavFormat = (typeof WAV_FORMATS)[number];
 export const DEFAULT_WAV: WavFormat = 'wav_24000';
 
+/** Eleven v4: the highest-quality model, follows audio tags well and supports professional voice clones. */
+export const DEFAULT_MODEL = 'eleven_v4';
+
 const VOICE_ID = /^[A-Za-z0-9_-]{6,64}$/;
 export const isVoiceId = (v: unknown): v is string => typeof v === 'string' && VOICE_ID.test(v);
 
@@ -92,13 +95,13 @@ async function audio(res: Response): Promise<Buffer> {
 /** One speaker, one line. */
 export async function speak(key: string, p: { voiceId: string; text: string; modelId?: string; format?: WavFormat }): Promise<Buffer> {
   if (!isVoiceId(p.voiceId)) throw new ElevenLabsError(400, 'That is not a valid ElevenLabs voice id');
-  const res = await call(key, 'POST', `/v1/text-to-speech/${p.voiceId}?output_format=${p.format ?? DEFAULT_WAV}`, { text: p.text, model_id: p.modelId ?? 'eleven_multilingual_v2' }, 'audio/*');
+  const res = await call(key, 'POST', `/v1/text-to-speech/${p.voiceId}?output_format=${p.format ?? DEFAULT_WAV}`, { text: p.text, model_id: p.modelId ?? DEFAULT_MODEL }, 'audio/*');
   return audio(res);
 }
 
 /** Several speakers in one take (up to 10 voices; ElevenLabs advises at most ~2,000 characters per request). */
-export async function dialogue(key: string, p: { inputs: { voiceId: string; text: string }[]; format?: WavFormat }): Promise<Buffer> {
+export async function dialogue(key: string, p: { inputs: { voiceId: string; text: string }[]; modelId?: string; format?: WavFormat }): Promise<Buffer> {
   for (const i of p.inputs) if (!isVoiceId(i.voiceId)) throw new ElevenLabsError(400, 'That is not a valid ElevenLabs voice id');
-  const res = await call(key, 'POST', `/v1/text-to-dialogue?output_format=${p.format ?? DEFAULT_WAV}`, { inputs: p.inputs.map((i) => ({ text: i.text, voice_id: i.voiceId })) }, 'audio/*');
+  const res = await call(key, 'POST', `/v1/text-to-dialogue?output_format=${p.format ?? DEFAULT_WAV}`, { inputs: p.inputs.map((i) => ({ text: i.text, voice_id: i.voiceId })), model_id: p.modelId ?? DEFAULT_MODEL }, 'audio/*');
   return audio(res);
 }

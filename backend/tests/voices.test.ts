@@ -28,6 +28,7 @@ const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WA
 const el = { server: null as http.Server | null, url: '', seen: [] as { method: string; url: string; key: string | undefined; body: any }[], reject: false };
 const hf = { server: null as http.Server | null, url: '', puts: [] as { url: string; bytes: number; type: string | null }[] };
 const realFetch = globalThis.fetch;
+const claude = { server: null as http.Server | null, replies: [] as string[], requests: [] as any[] };
 
 beforeAll(async () => {
   el.server = http.createServer((req, res) => {
@@ -61,6 +62,19 @@ beforeAll(async () => {
   await new Promise<void>((r) => el.server!.listen(0, '127.0.0.1', r));
   el.url = `http://127.0.0.1:${(el.server!.address() as AddressInfo).port}`;
   process.env.ELEVENLABS_API_BASE = el.url;
+
+  claude.server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      claude.requests.push(JSON.parse(Buffer.concat(chunks).toString() || '{}'));
+      const text = claude.replies.shift() ?? '[]';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'msg_t', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', content: [{ type: 'text', text }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 400, output_tokens: 60 } }));
+    });
+  });
+  await new Promise<void>((r) => claude.server!.listen(0, '127.0.0.1', r));
+  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(claude.server!.address() as AddressInfo).port}`;
 
   hf.server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -98,12 +112,15 @@ beforeAll(async () => {
 afterAll(async () => {
   vi.restoreAllMocks();
   delete process.env.ELEVENLABS_API_BASE;
+  delete process.env.ANTHROPIC_BASE_URL;
+  claude.server?.close();
   server.close();
   el.server?.close();
   hf.server?.close();
   await db.close();
 });
 afterEach(() => {
+  claude.requests.length = 0;
   el.seen.length = 0;
   hf.puts.length = 0;
 });
@@ -151,22 +168,22 @@ describe('speaking a line', () => {
   });
 
   it('speaks one line as WAV and hosts it on Higgsfield', async () => {
-    const r = await call('POST', '/studio/speech', { as: 'user', body: { voiceId: 'marcusvoice0001', text: 'I told you not to come here.' } });
+    const r = await call('POST', '/studio/speech', { as: 'user', body: { voiceId: 'marcusvoice0001', text: 'I told you not to come here.', autoTags: false } });
     expect(r.status).toBe(201);
-    expect(r.json).toEqual({ url: 'https://cdn.test/in/line-1.wav', bytes: WAV.length, format: 'wav_24000', speakers: 1 });
-    expect(el.seen[0]).toMatchObject({ method: 'POST', url: '/v1/text-to-speech/marcusvoice0001?output_format=wav_24000', body: { text: 'I told you not to come here.', model_id: 'eleven_multilingual_v2' } });
+    expect(r.json).toEqual({ url: 'https://cdn.test/in/line-1.wav', bytes: WAV.length, format: 'wav_24000', model: 'eleven_v4', speakers: 1, spokenText: 'I told you not to come here.', autoTags: { enabled: false, linesTagged: 0 } });
+    expect(el.seen[0]).toMatchObject({ method: 'POST', url: '/v1/text-to-speech/marcusvoice0001?output_format=wav_24000', body: { text: 'I told you not to come here.', model_id: 'eleven_v4' } });
     expect(hf.puts).toEqual([{ url: 'https://upload.test/put/line-1', bytes: WAV.length, type: 'audio/wav' }]);
   });
 
   it('speaks a multi-voice scene in one request', async () => {
     const r = await call('POST', '/studio/speech', {
       as: 'user',
-      body: { format: 'wav_22050', lines: [{ voiceId: 'marcusvoice0001', text: '[calm] You came.' }, { voiceId: 'nyavoice0000001', text: '[nervous] I had to.' }, { voiceId: 'marcusvoice0001', text: 'Sit.' }] },
+      body: { format: 'wav_22050', autoTags: false, lines: [{ voiceId: 'marcusvoice0001', text: '[calm] You came.' }, { voiceId: 'nyavoice0000001', text: '[nervous] I had to.' }, { voiceId: 'marcusvoice0001', text: 'Sit.' }] },
     });
     expect(r.status).toBe(201);
     expect(r.json.speakers).toBe(2);
     expect(el.seen[0].url).toBe('/v1/text-to-dialogue?output_format=wav_22050');
-    expect(el.seen[0].body).toEqual({ inputs: [{ text: '[calm] You came.', voice_id: 'marcusvoice0001' }, { text: '[nervous] I had to.', voice_id: 'nyavoice0000001' }, { text: 'Sit.', voice_id: 'marcusvoice0001' }] });
+    expect(el.seen[0].body).toEqual({ inputs: [{ text: '[calm] You came.', voice_id: 'marcusvoice0001' }, { text: '[nervous] I had to.', voice_id: 'nyavoice0000001' }, { text: 'Sit.', voice_id: 'marcusvoice0001' }], model_id: 'eleven_v4' });
   });
 
   it('validates input before spending anything', async () => {
@@ -179,5 +196,78 @@ describe('speaking a line', () => {
     expect(await bad({ lines: [{ voiceId: 'marcusvoice0001', text: 'x'.repeat(1500) }, { voiceId: 'nyavoice0000001', text: 'y'.repeat(600) }] })).toBe(400); // over ~2,000 characters in total
     expect((await call('POST', '/studio/speech', { as: 'viewer', body: { voiceId: 'marcusvoice0001', text: 'Hi' } })).status).toBe(403);
     expect(el.seen).toHaveLength(0);
+  });
+});
+
+describe('auto tags for Eleven v4', () => {
+  const speech = (body: Record<string, unknown>) => call('POST', '/studio/speech', { as: 'user', body: { voiceId: 'marcusvoice0001', ...body } });
+
+  it('only ever adds tags: the word check ignores tags and spacing but nothing else', async () => {
+    const { sameWords, stripTags } = await import('../src/services/voiceTags');
+    expect(stripTags('[whispers] I told you  [sighs] not to come here.')).toBe('I told you not to come here.');
+    expect(sameWords('I told you not to come here.', '[low, steady voice] I told you not to come here. [exhales]')).toBe(true);
+    expect(sameWords('I told you not to come here.', 'I told you never to come here.')).toBe(false); // a word changed
+    expect(sameWords('I told you not to come here.', 'I told you not to come here!')).toBe(false); // punctuation changed
+    expect(sameWords('Wait.', '[curious] Wait?')).toBe(false);
+  });
+
+  it('is skipped, with a reason, when there is no Claude key, and the line is still spoken as written', async () => {
+    const r = await speech({ text: 'I told you not to come here.' });
+    expect(r.status).toBe(201);
+    expect(r.json.spokenText).toBe('I told you not to come here.');
+    expect(r.json.autoTags).toMatchObject({ enabled: true, linesTagged: 0, note: expect.stringMatching(/no Anthropic/) });
+    expect(claude.requests).toHaveLength(0);
+  });
+
+  it('adds tags matched to the voice, shows them in a dry run, and spends nothing on ElevenLabs', async () => {
+    await call('PUT', '/settings/secrets/anthropic', { as: 'admin', body: { value: 'sk-ant-test-key-12345678' } });
+    claude.replies.push(JSON.stringify(['[low, steady voice] I told you not to come here.']));
+    const r = await speech({ text: 'I told you not to come here.', dryRun: true });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ dryRun: true, model: 'eleven_v4', spokenText: '[low, steady voice] I told you not to come here.', autoTags: { enabled: true, linesTagged: 1 } });
+    // Claude was told who is speaking and what the voice is like
+    const sent = JSON.parse(claude.requests[0].messages[0].content);
+    expect(sent).toEqual([{ speaker: 'Marcus', voice: 'Deep, calm', text: 'I told you not to come here.' }]);
+    expect(claude.requests[0].model).toBe('claude-haiku-5-5');
+    expect(claude.requests[0].system).toMatch(/NEVER change/);
+    // only the voice list was fetched from ElevenLabs: no speech was generated, nothing uploaded
+    expect(el.seen.map((x) => x.url)).toEqual(['/v2/voices', '/v2/voices?next_page_token=PAGE2']);
+    expect(hf.puts).toHaveLength(0);
+  });
+
+  it('speaks the tagged text on Eleven v4, and bills the tagging to Claude usage', async () => {
+    const before = (await db.query(`SELECT COUNT(*)::int AS n FROM usage_events WHERE provider='claude' AND model='claude-haiku-5-5'`)).rows[0].n;
+    claude.replies.push(JSON.stringify(['[firmly] I told you not to come here.']));
+    const r = await speech({ text: 'I told you not to come here.' });
+    expect(r.status).toBe(201);
+    expect(r.json.spokenText).toBe('[firmly] I told you not to come here.');
+    const tts = el.seen.find((x) => x.url.startsWith('/v1/text-to-speech/'))!;
+    expect(tts.body).toEqual({ text: '[firmly] I told you not to come here.', model_id: 'eleven_v4' });
+    expect((await db.query(`SELECT COUNT(*)::int AS n FROM usage_events WHERE provider='claude' AND model='claude-haiku-5-5'`)).rows[0].n).toBe(before + 1);
+  });
+
+  it('keeps a line exactly as written when the suggested tags changed its words', async () => {
+    claude.replies.push(JSON.stringify(['[angry] I told you NEVER to come here.']));
+    const r = await speech({ text: 'I told you not to come here.', dryRun: true });
+    expect(r.json.spokenText).toBe('I told you not to come here.');
+    expect(r.json.autoTags).toMatchObject({ linesTagged: 0, note: expect.stringMatching(/kept as written/) });
+  });
+
+  it('tags a whole scene in one call, per speaker, and ignores a reply that does not match the script', async () => {
+    claude.replies.push(JSON.stringify(['[calm] You came.', '[nervous] I had to.']));
+    const scene = { lines: [{ voiceId: 'marcusvoice0001', text: 'You came.' }, { voiceId: 'nyavoice0000001', text: 'I had to.' }] };
+    const r = await call('POST', '/studio/speech', { as: 'user', body: { ...scene, dryRun: true } });
+    expect(r.json.spokenLines).toEqual([{ voiceId: 'marcusvoice0001', text: '[calm] You came.' }, { voiceId: 'nyavoice0000001', text: '[nervous] I had to.' }]);
+    expect(JSON.parse(claude.requests[0].messages[0].content).map((l: any) => l.speaker)).toEqual(['Marcus', 'Nya']);
+    claude.replies.push(JSON.stringify(['only one line back']));
+    const bad = await call('POST', '/studio/speech', { as: 'user', body: { ...scene, dryRun: true } });
+    expect(bad.json.spokenLines.map((l: any) => l.text)).toEqual(['You came.', 'I had to.']);
+    expect(bad.json.autoTags.note).toMatch(/did not match/);
+  });
+
+  it('can be switched off', async () => {
+    const r = await speech({ text: 'Plain.', dryRun: true, autoTags: false });
+    expect(r.json).toMatchObject({ spokenText: 'Plain.', autoTags: { enabled: false, linesTagged: 0 } });
+    expect(claude.requests).toHaveLength(0);
   });
 });

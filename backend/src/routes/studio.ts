@@ -4,7 +4,8 @@ import { badRequest, HttpError, notFound, wrap } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { createCharacter, getBaseUrl, getCharacter, getHfConfig, HiggsfieldError, listCharacters, uploadFile, UPLOAD_TYPES } from '../services/higgsfield';
 import { createRun, generationQueue } from '../services/jobs';
-import { dialogue, DEFAULT_WAV, ElevenLabsError, listVoices, speak, WAV_FORMATS } from '../services/elevenlabs';
+import { addAudioTags } from '../services/voiceTags';
+import { dialogue, DEFAULT_MODEL, DEFAULT_WAV, ElevenLabsError, isVoiceId, listVoices, speak, WAV_FORMATS } from '../services/elevenlabs';
 import { getSecret } from '../services/secrets';
 import { livePrice } from '../services/livePrice';
 import { getPrices, prepareGeneration, studioWork } from '../services/studio';
@@ -206,7 +207,11 @@ const speechBody = z.object({
   /** One speaker: { voiceId, text }. A scene: { lines: [{ voiceId, text }, ...] } (up to 10 different voices). */
   voiceId: z.string().max(64).optional(),
   text: z.string().trim().min(1).max(2000).optional(),
-  modelId: z.string().max(60).optional(),
+  modelId: z.string().max(60).default(DEFAULT_MODEL),
+  /** Add Eleven v4 audio tags ([whispers], [sighs]...) to the text first. Never changes a word. */
+  autoTags: z.boolean().default(true),
+  /** Only show the tagged text; spend nothing on ElevenLabs and host nothing. */
+  dryRun: z.boolean().default(false),
   lines: z.array(z.object({ voiceId: z.string().max(64), text: z.string().trim().min(1).max(2000) })).min(1).max(40).optional(),
 });
 
@@ -221,22 +226,46 @@ studio.post(
     const org = req.user!.orgId;
     const single = b.voiceId && b.text;
     if (!single && !b.lines) throw badRequest('Send either voiceId + text, or lines.');
+    // Reject a bad voice id before anything is sent to ElevenLabs.
+    for (const id of single ? [b.voiceId!] : b.lines!.map((l) => l.voiceId)) if (!isVoiceId(id)) throw badRequest('That is not a valid ElevenLabs voice id.');
     if (b.lines && b.lines.reduce((n, l) => n + l.text.length, 0) > 2000) throw badRequest('A scene can be at most about 2,000 characters in total. Split it into several takes.');
     const [key, hf] = await Promise.all([elevenKey(org), getHfConfig(org)]);
-    if (!hf) throw badRequest('Connect Higgsfield first: the audio is hosted there so video models can use it.');
+    if (!hf && !b.dryRun) throw badRequest('Connect Higgsfield first: the audio is hosted there so video models can use it.');
+
+    // Optional: let Claude add Eleven v4 audio tags, matched to each voice's character. Words are never changed.
+    const script = single ? [{ voiceId: b.voiceId!, text: b.text! }] : b.lines!;
+    let spoken = script.map((l) => l.text);
+    let tagNote: string | undefined;
+    let taggedCount = 0;
+    if (b.autoTags) {
+      let known: Awaited<ReturnType<typeof listVoices>> = [];
+      try {
+        known = await listVoices(key);
+      } catch (e) {
+        return upstream(e);
+      }
+      const byId = new Map(known.map((v) => [v.id, v]));
+      const t = await addAudioTags(org, script.map((l) => ({ speaker: byId.get(l.voiceId)?.name, voiceDescription: byId.get(l.voiceId)?.description, text: l.text })));
+      spoken = t.lines;
+      tagNote = t.note;
+      taggedCount = t.tagged;
+    }
+    const tagInfo = { enabled: b.autoTags, linesTagged: taggedCount, ...(tagNote ? { note: tagNote } : {}) };
+    if (b.dryRun) return void res.json({ dryRun: true, model: b.modelId, spokenText: single ? spoken[0] : undefined, spokenLines: single ? undefined : script.map((l, i) => ({ voiceId: l.voiceId, text: spoken[i] })), autoTags: tagInfo });
+
     let wav: Buffer;
     try {
-      wav = single ? await speak(key, { voiceId: b.voiceId!, text: b.text!, modelId: b.modelId, format: b.format }) : await dialogue(key, { inputs: b.lines!, format: b.format });
+      wav = single ? await speak(key, { voiceId: b.voiceId!, text: spoken[0], modelId: b.modelId, format: b.format }) : await dialogue(key, { inputs: script.map((l, i) => ({ voiceId: l.voiceId, text: spoken[i] })), modelId: b.modelId, format: b.format });
     } catch (e) {
       return upstream(e);
     }
     let url: string;
     try {
-      url = await uploadFile(hf, wav, 'audio/wav');
+      url = await uploadFile(hf!, wav, 'audio/wav');
     } catch (e) {
       if (e instanceof HiggsfieldError) throw new HttpError(502, e.message, 'upstream');
       throw e;
     }
-    res.status(201).json({ url, bytes: wav.length, format: b.format, speakers: single ? 1 : new Set(b.lines!.map((l) => l.voiceId)).size });
+    res.status(201).json({ url, bytes: wav.length, format: b.format, model: b.modelId, speakers: single ? 1 : new Set(b.lines!.map((l) => l.voiceId)).size, spokenText: single ? spoken[0] : undefined, spokenLines: single ? undefined : script.map((l, i) => ({ voiceId: l.voiceId, text: spoken[i] })), autoTags: tagInfo });
   }),
 );
