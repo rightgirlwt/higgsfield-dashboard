@@ -91,16 +91,37 @@ export default function Studio() {
     return m ? `${m.label} is required` : null;
   }, [mode, prompt, media]);
 
+  const [live, setLive] = useState<number | null>(null); // Higgsfield's quote for this exact request, when available
   const nativeBatch = !!mode && 'batch_size' in mode.params;
   const outputs = nativeBatch ? Number(settings.batch_size ?? 1) : count;
   const lp = mode?.price ?? null;
-  const seconds = model?.priceUnit !== 'second' ? 1 : typeof settings.duration === 'number' ? settings.duration : (lp?.assumedSeconds ?? 1);
+  // Duration is a number for slider settings and text for dropdown ones ("6"); both are billed by their length.
+  const dur = Number(settings.duration);
+  const seconds = model?.priceUnit !== 'second' ? 1 : Number.isFinite(dur) && dur > 0 ? dur : (lp?.assumedSeconds ?? 1);
   // Admin-set price wins; otherwise Higgsfield's list price (exact for the chosen resolution when published, else the low end of its range).
   const unit = model?.priceUsd != null ? model.priceUsd : lp ? (lp.byResolution?.[settings.resolution] ?? lp.min) : null;
   const exact = model?.priceUsd != null || !lp || lp.byResolution?.[settings.resolution] !== undefined || lp.min === lp.max;
-  const estimate = unit !== null ? unit * seconds * outputs : null;
-  const estimateMax = !exact && lp ? lp.max * seconds * outputs : null;
+  const snapshotEstimate = unit !== null ? unit * seconds * outputs : null;
+  const estimate = live !== null ? live : snapshotEstimate;
+  const estimateMax = live === null && !exact && lp ? lp.max * seconds * outputs : null;
   const promo = model?.priceUsd == null && lp?.promoEnds ? lp.promoEnds : null;
+
+  // Ask Higgsfield what exactly this request costs (price depends on sound, resolution, duration...). Falls back to the saved estimate.
+  const quoteKey = JSON.stringify({ m: model?.id, md: mode?.id, settings, media, count: nativeBatch ? 1 : count, p: prompt.trim() ? 1 : 0 });
+  const connected = !!catalog.data?.connected;
+  useEffect(() => {
+    setLive(null);
+    if (!model || !mode || missing || !connected || model.priceUsd != null) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      const clean = Object.fromEntries(Object.entries(settings).filter(([, v]) => v !== '' && v !== undefined && v !== null));
+      api.post<{ usd: number | null }>('/studio/estimate', { modelId: model.id, mode: mode.id, prompt, settings: clean, media, count: nativeBatch ? 1 : count })
+        .then((r) => alive && setLive(r.usd))
+        .catch(() => alive && setLive(null));
+    }, 500);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey, missing, connected]);
 
   const generate = async () => {
     if (!model || !mode) return;
@@ -283,9 +304,9 @@ export default function Studio() {
                 {outputs} {model.surface === 'image' ? 'image' : 'video'}{outputs > 1 ? 's' : ''}{model.priceUnit === 'second' && seconds > 1 ? ` × ${seconds}s` : ''} ·{' '}
                 {estimate !== null ? (
                   <>
-                    {exact ? 'about' : 'from'} <strong className="text-slate-200">{usd(estimate)}</strong>
+                    {live !== null || exact ? 'about' : 'from'} <strong className="text-slate-200">{usd(estimate)}</strong>
                     {estimateMax !== null && <> (up to {usd(estimateMax)})</>}{' '}
-                    <span className="text-slate-500">{model.priceUsd != null ? '(your set price)' : '(Higgsfield list price)'}</span>
+                    <span className="text-slate-500">{model.priceUsd != null ? '(your set price)' : live !== null ? '(Higgsfield’s quote)' : '(Higgsfield list price)'}</span>
                     {model.priceUnit === 'second' && !('duration' in (mode?.params ?? {})) && <span className="text-slate-500"> · billed by input video length, assumed {seconds}s</span>}
                     {promo && <span className="text-slate-500"> · promo rate until {promo}</span>}
                   </>

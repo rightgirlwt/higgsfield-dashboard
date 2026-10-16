@@ -164,6 +164,25 @@ describe('live prices from Higgsfield', () => {
   });
 });
 
+describe('Studio page quote', () => {
+  it('returns Higgsfield’s quote for the exact request, null when an admin price is set, and validates input', async () => {
+    hf.estimateUsd = 0.004;
+    hf.mode = 'price';
+    clearLivePriceCache();
+    const q = await call('POST', '/studio/estimate', { as: 'user', body: { modelId: 'soul-2', prompt: 'a portrait', settings: { resolution: '1080p' } } });
+    expect(q.json).toEqual({ usd: 0.004 });
+    expect(hf.estimates.at(-1)?.body).toMatchObject({ prompt: 'a portrait', resolution: '1080p' });
+    const three = await call('POST', '/studio/estimate', { as: 'user', body: { modelId: 'kling-3-std', prompt: 'x', count: 3 } });
+    expect(three.json.usd).toBeCloseTo(0.012, 8); // one quote per request, three requests
+    await call('PUT', '/settings/studio-prices', { as: 'admin', body: { prices: { 'soul-2': 0.01 } } });
+    expect((await call('POST', '/studio/estimate', { as: 'user', body: { modelId: 'soul-2', prompt: 'a portrait' } })).json).toEqual({ usd: null });
+    await call('PUT', '/settings/studio-prices', { as: 'admin', body: { prices: { 'soul-2': null } } });
+    expect((await call('POST', '/studio/estimate', { as: 'user', body: { modelId: 'nope', prompt: 'x' } })).status).toBe(400);
+    hf.estimateUsd = null;
+    clearLivePriceCache();
+    expect((await call('POST', '/studio/estimate', { as: 'user', body: { modelId: 'soul-2', prompt: 'a portrait' } })).json).toEqual({ usd: null }); // lookup unavailable -> page falls back
+  });
+});
 describe('price check', () => {
   it('compares every model with Higgsfield’s estimate, shows written pricing as is, and needs an admin', async () => {
     expect((await call('POST', '/settings/higgsfield/check-prices', { as: 'user' })).status).toBe(403);

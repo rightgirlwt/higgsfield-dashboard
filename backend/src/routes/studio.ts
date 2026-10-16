@@ -4,6 +4,7 @@ import { badRequest, HttpError, notFound, wrap } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { createCharacter, getBaseUrl, getCharacter, getHfConfig, HiggsfieldError, listCharacters, uploadFile, UPLOAD_TYPES } from '../services/higgsfield';
 import { createRun, generationQueue } from '../services/jobs';
+import { livePrice } from '../services/livePrice';
 import { getPrices, prepareGeneration, studioWork } from '../services/studio';
 import { PRICES_AS_OF, publicModel, STUDIO_MODELS, type MediaRole } from '../services/studioCatalog';
 import { getDb } from '../ctx';
@@ -39,6 +40,22 @@ const generateBody = z.object({
   media: z.partialRecord(z.enum(ROLES), z.array(z.string().max(2100)).max(9)).default({}),
   count: z.number().int().min(1).max(4).default(1),
 });
+
+/**
+ * Higgsfield's own quote for exactly this request (a free lookup). `usd` is null when it can't be had (not connected, an admin flat
+ * price is set, or the model is priced in words), and the page then shows the saved estimate instead.
+ */
+studio.post(
+  '/estimate',
+  wrap(async (req, res) => {
+    const b = generateBody.parse(req.body);
+    const org = req.user!.orgId;
+    const p = prepareGeneration({ ...b, media: b.media as Partial<Record<MediaRole, string[]>> });
+    const adminPrice = (await getPrices(org))[p.model.id] ?? null;
+    const usd = adminPrice === null ? await livePrice(org, p.path, p.body) : null;
+    res.json({ usd: usd === null ? null : usd * p.requests });
+  }),
+);
 
 studio.post(
   '/generate',
