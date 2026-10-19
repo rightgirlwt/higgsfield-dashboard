@@ -1,6 +1,6 @@
 /**
  * ElevenLabs client (https://elevenlabs.io/docs/api-reference). Auth is the `xi-api-key` header.
- * Endpoints used: GET /v2/voices, POST /v1/text-to-speech/{voice_id}, POST /v1/text-to-dialogue.
+ * Endpoints used: GET /v2/voices, POST /v1/text-to-speech/{voice_id}, POST /v1/text-to-dialogue, POST /v1/speech-to-speech/{voice_id}.
  * Output is requested as WAV, which is what Higgsfield accepts for audio inputs.
  */
 export class ElevenLabsError extends Error {
@@ -28,11 +28,13 @@ export const isVoiceId = (v: unknown): v is string => typeof v === 'string' && V
 
 async function call(key: string, method: 'GET' | 'POST', path: string, body?: unknown, accept = 'application/json'): Promise<Response> {
   let res: Response;
+  const isForm = body instanceof FormData;
   try {
     res = await fetch(`${base()}${path}`, {
       method,
-      headers: { 'xi-api-key': key, Accept: accept, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // A FormData body sets its own multipart Content-Type (with the boundary).
+      headers: { 'xi-api-key': key, Accept: accept, ...(body !== undefined && !isForm ? { 'Content-Type': 'application/json' } : {}) },
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(90_000),
     });
   } catch (err) {
@@ -96,6 +98,27 @@ async function audio(res: Response): Promise<Buffer> {
 export async function speak(key: string, p: { voiceId: string; text: string; modelId?: string; format?: WavFormat }): Promise<Buffer> {
   if (!isVoiceId(p.voiceId)) throw new ElevenLabsError(400, 'That is not a valid ElevenLabs voice id');
   const res = await call(key, 'POST', `/v1/text-to-speech/${p.voiceId}?output_format=${p.format ?? DEFAULT_WAV}`, { text: p.text, model_id: p.modelId ?? DEFAULT_MODEL }, 'audio/*');
+  return audio(res);
+}
+
+/** Voice changer (speech to speech) model. Its delivery, timing and emotion are kept; only the voice changes. */
+export const DEFAULT_STS_MODEL = 'eleven_multilingual_sts_v2';
+
+/**
+ * Voice changing: take a recording of someone performing a line and re-voice it as one of your voices.
+ * Pacing, pauses and emotion come from the recording, so this is the way to get an exact performance.
+ */
+export async function changeVoice(
+  key: string,
+  p: { voiceId: string; audio: Buffer; contentType: string; filename?: string; modelId?: string; removeBackgroundNoise?: boolean; format?: WavFormat },
+): Promise<Buffer> {
+  if (!isVoiceId(p.voiceId)) throw new ElevenLabsError(400, 'That is not a valid ElevenLabs voice id');
+  if (p.audio.length === 0) throw new ElevenLabsError(400, 'The recording is empty');
+  const form = new FormData();
+  form.append('audio', new Blob([new Uint8Array(p.audio)], { type: p.contentType }), p.filename ?? 'recording');
+  form.append('model_id', p.modelId ?? DEFAULT_STS_MODEL);
+  if (p.removeBackgroundNoise) form.append('remove_background_noise', 'true');
+  const res = await call(key, 'POST', `/v1/speech-to-speech/${p.voiceId}?output_format=${p.format ?? DEFAULT_WAV}`, form, 'audio/*');
   return audio(res);
 }
 

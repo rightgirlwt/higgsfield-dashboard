@@ -228,9 +228,13 @@ describe('promotion reminder', () => {
     const promo = promoEndDate()!;
     const before = new Date(`${promo}T10:00:00Z`).getTime();
     const after = new Date(`${promo}T23:59:59Z`).getTime() + 3600_000;
+    // Earlier tests ran price checks at the real clock time. Once the real date is past the promo those would count as
+    // "re-checked after the promotion", so set them aside and put them back (re-dated) for the last step.
+    const earlier = (await db.query(`SELECT org_id, value FROM org_settings WHERE key='price_check'`)).rows;
+    await db.query(`DELETE FROM org_settings WHERE key='price_check'`);
     expect(await checkPriceFreshness(before)).toBe(0);
 
-    // the earlier price checks ran today (before the promo ended), so they don't count
+    // no price check since the promotion ended, so it raises the reminder
     expect(await checkPriceFreshness(after)).toBe(1);
     expect(await checkPriceFreshness(after)).toBe(0); // once per promotion
     const a = (await db.query(`SELECT severity, message FROM alerts WHERE kind='prices_check'`)).rows;
@@ -239,7 +243,10 @@ describe('promotion reminder', () => {
 
     // re-checked after the promotion: no alert even if it was never raised
     await db.query(`DELETE FROM alerts WHERE kind='prices_check'`);
-    await db.query(`UPDATE org_settings SET value = jsonb_set(value, '{checkedAt}', to_jsonb($1::text)) WHERE key='price_check'`, [new Date(after).toISOString()]);
+    for (const r of earlier) {
+      await db.query(`INSERT INTO org_settings (org_id, key, value) VALUES ($1, 'price_check', jsonb_set($2::jsonb, '{checkedAt}', to_jsonb($3::text)))`, [r.org_id, JSON.stringify(r.value), new Date(after).toISOString()]);
+    }
+    expect(earlier.length).toBeGreaterThan(0);
     expect(await checkPriceFreshness(after)).toBe(0);
   });
 });

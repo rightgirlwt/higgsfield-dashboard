@@ -6,7 +6,7 @@ import { createCharacter, getBaseUrl, getCharacter, getHfConfig, HiggsfieldError
 import { createRun, generationQueue } from '../services/jobs';
 import { CONVERTIBLE_AUDIO, toWav } from '../services/audioConvert';
 import { addAudioTags } from '../services/voiceTags';
-import { dialogue, DEFAULT_MODEL, DEFAULT_WAV, ElevenLabsError, isVoiceId, listVoices, speak, WAV_FORMATS } from '../services/elevenlabs';
+import { changeVoice, dialogue, DEFAULT_MODEL, DEFAULT_STS_MODEL, DEFAULT_WAV, ElevenLabsError, isVoiceId, listVoices, speak, WAV_FORMATS } from '../services/elevenlabs';
 import { getSecret } from '../services/secrets';
 import { livePrice } from '../services/livePrice';
 import { getPrices, prepareGeneration, studioWork } from '../services/studio';
@@ -126,6 +126,47 @@ studio.post(
       id = rows[0].id;
     }
     res.status(201).json({ url, kind: spec.kind, name, bytes: body.length, mediaId: id });
+  }),
+);
+
+const MAX_RECORDING_BYTES = 40 * 1024 * 1024;
+const audioBody = express.raw({ type: (req) => typeOf(req).startsWith('audio/') || typeOf(req) === 'video/webm', limit: MAX_RECORDING_BYTES });
+const voiceChangeQuery = z.object({
+  voiceId: z.string().max(64),
+  modelId: z.string().max(60).default(DEFAULT_STS_MODEL),
+  removeNoise: z.enum(['true', 'false']).default('false'),
+  format: z.enum(WAV_FORMATS).default(DEFAULT_WAV),
+});
+
+/**
+ * Voice changing: the request body is a recording (WAV, MP3, M4A, WebM...). It is re-voiced as one of your ElevenLabs voices,
+ * keeping the original timing and emotion, then hosted on Higgsfield like /speech. Spends ElevenLabs credits.
+ */
+studio.post(
+  '/voice-change',
+  audioBody,
+  wrap(async (req, res) => {
+    const q = voiceChangeQuery.parse(req.query);
+    if (!isVoiceId(q.voiceId)) throw badRequest('That is not a valid ElevenLabs voice id.');
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) throw badRequest('Send a recording as an audio file (WAV, MP3, M4A or WebM).');
+    const org = req.user!.orgId;
+    const [key, hf] = await Promise.all([elevenKey(org), getHfConfig(org)]);
+    if (!hf) throw badRequest('Connect Higgsfield first: the audio is hosted there so video models can use it.');
+    let wav: Buffer;
+    try {
+      wav = await changeVoice(key, { voiceId: q.voiceId, audio: body, contentType: typeOf(req), modelId: q.modelId, removeBackgroundNoise: q.removeNoise === 'true', format: q.format });
+    } catch (e) {
+      return upstream(e);
+    }
+    let url: string;
+    try {
+      url = await uploadFile(hf, wav, 'audio/wav');
+    } catch (e) {
+      if (e instanceof HiggsfieldError) throw new HttpError(502, e.message, 'upstream');
+      throw e;
+    }
+    res.status(201).json({ url, bytes: wav.length, format: q.format, model: q.modelId, sourceBytes: body.length });
   }),
 );
 

@@ -35,8 +35,9 @@ beforeAll(async () => {
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString();
-      const body = raw ? JSON.parse(raw) : null;
+      const raw = Buffer.concat(chunks).toString('latin1');
+      // Voice changing sends multipart; keep it as text so the test can look for its fields.
+      const body = raw ? (String(req.headers['content-type']).includes('json') ? JSON.parse(raw) : raw) : null;
       el.seen.push({ method: req.method!, url: req.url!, key: req.headers['xi-api-key'] as string | undefined, body });
       const json = (code: number, obj: unknown) => (res.writeHead(code, { 'content-type': 'application/json' }), res.end(JSON.stringify(obj)));
       if (el.reject || String(req.headers['xi-api-key']).startsWith('bad-key')) return json(401, { detail: { status: 'invalid_api_key', message: 'Invalid API key' } });
@@ -52,7 +53,7 @@ beforeAll(async () => {
           next_page_token: 'PAGE2',
         });
       }
-      if (req.method === 'POST' && (req.url!.startsWith('/v1/text-to-speech/') || req.url!.startsWith('/v1/text-to-dialogue'))) {
+      if (req.method === 'POST' && (req.url!.startsWith('/v1/text-to-speech/') || req.url!.startsWith('/v1/text-to-dialogue') || req.url!.startsWith('/v1/speech-to-speech/'))) {
         res.writeHead(200, { 'content-type': 'audio/wav' });
         return res.end(WAV);
       }
@@ -269,6 +270,40 @@ describe('auto tags for Eleven v4', () => {
     const r = await speech({ text: 'Plain.', dryRun: true, autoTags: false });
     expect(r.json).toMatchObject({ spokenText: 'Plain.', autoTags: { enabled: false, linesTagged: 0 } });
     expect(claude.requests).toHaveLength(0);
+  });
+});
+
+describe('voice changing', () => {
+  const change = async (query: string, body: Uint8Array | null, type = 'audio/webm', as = 'user') => {
+    const res = await realFetch(`${base}/api/studio/voice-change${query}`, { method: 'POST', headers: { 'content-type': type, authorization: `Bearer ${tokens[as]}` }, body: body ?? undefined });
+    return { status: res.status, json: await res.json() };
+  };
+  const recording = new Uint8Array(Buffer.alloc(300, 5));
+
+  it('re-voices a recording as one of your voices and hosts the WAV on Higgsfield', async () => {
+    const r = await change('?voiceId=marcusvoice0001&removeNoise=true', recording);
+    expect(r.status).toBe(201);
+    expect(r.json).toEqual({ url: 'https://cdn.test/in/line-1.wav', bytes: WAV.length, format: 'wav_24000', model: 'eleven_multilingual_sts_v2', sourceBytes: 300 });
+    expect(el.seen).toHaveLength(1);
+    expect(el.seen[0]).toMatchObject({ method: 'POST', url: '/v1/speech-to-speech/marcusvoice0001?output_format=wav_24000', key: 'sk_test_voicekey_1234' });
+    const form = String(el.seen[0].body);
+    expect(form).toContain('name="audio"');
+    expect(form).toContain('eleven_multilingual_sts_v2');
+    expect(form).toContain('name="remove_background_noise"');
+    expect(hf.puts).toMatchObject([{ type: 'audio/wav', bytes: WAV.length }]);
+  });
+
+  it('checks the voice and the recording before spending anything', async () => {
+    expect((await change('?voiceId=bad!', recording)).status).toBe(400);
+    expect((await change('?voiceId=marcusvoice0001', null)).status).toBe(400);
+    expect((await change('?voiceId=marcusvoice0001', recording, 'application/pdf')).status).toBe(400);
+    expect((await change('?voiceId=marcusvoice0001&format=mp3', recording)).status).toBe(400);
+    expect(el.seen).toHaveLength(0);
+  });
+
+  it('is not open to the read-only viewer', async () => {
+    expect((await change('?voiceId=marcusvoice0001', recording, 'audio/webm', 'viewer')).status).toBe(403);
+    expect(el.seen).toHaveLength(0);
   });
 });
 

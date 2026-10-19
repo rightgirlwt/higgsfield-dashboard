@@ -9,6 +9,7 @@ import Overview from './pages/Overview';
 
 // Heavy pages (React Flow, charts, forms) are split out of the initial bundle.
 const Studio = lazy(() => import('./pages/Studio'));
+const Voices = lazy(() => import('./pages/Voices'));
 const Projects = lazy(() => import('./pages/Projects'));
 const Project = lazy(() => import('./pages/Project'));
 const PromptStudio = lazy(() => import('./pages/PromptStudio'));
@@ -61,7 +62,8 @@ export default function App() {
                     <Route path="projects" element={<Projects />} />
                     <Route path="projects/:id" element={<Project />} />
                     <Route path="studio" element={<Studio />} />
-                    <Route path="prompts" element={<PromptStudio />} />
+                    <Route path="voices" element={<Voices />} />
+                    <Route path="prompts"element={<PromptStudio />} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="workflows/:id" element={<WorkflowBuilder />} />
                     <Route path="media" element={<Media />} />
