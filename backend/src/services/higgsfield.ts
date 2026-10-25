@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { config } from '../config';
 import { placeholderImage } from '../lib/placeholder';
+import { saveLocalCopy } from './mediaStore';
 import { getSecret } from './secrets';
 import { getSetting } from './settings';
 
@@ -172,6 +173,8 @@ export async function uploadFile(cfg: HfConfig, data: Buffer, contentType: strin
     throw new HiggsfieldError(502, 'Could not reach Higgsfield storage to upload the file. Try again.');
   }
   if (!put.ok) throw new HiggsfieldError(502, `Upload to Higgsfield storage failed (${put.status})`);
+  // Higgsfield deletes uploads after about a week; keep our own copy so the link can be re-created later.
+  await saveLocalCopy(publicUrl, data, contentType);
   return publicUrl;
 }
 

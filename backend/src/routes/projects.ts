@@ -298,6 +298,17 @@ projects.put(
       `UPDATE project_assets SET kind=$2, name=$3, url=$4, notes=$5, character_id=$6 WHERE id=$1 RETURNING *`,
       [cur.id, b.kind ?? cur.kind, b.name ?? cur.name, b.url ?? cur.url, b.notes ?? cur.notes, b.characterId ?? cur.character_id],
     );
+    // A replaced image (for example one re-uploaded after Higgsfield deleted the old file) must also replace the old link
+    // on the shots that already use it, or those shots keep pointing at the dead file.
+    if (b.url && cur.url && b.url !== cur.url) {
+      const items = (await getDb().query('SELECT id, media FROM project_items WHERE project_id=$1 AND org_id=$2', [project.id, org])).rows;
+      for (const it of items) {
+        const media = it.media ?? {};
+        if (!Object.values(media).some((l) => Array.isArray(l) && l.includes(cur.url))) continue;
+        const next = Object.fromEntries(Object.entries(media).map(([role, l]) => [role, Array.isArray(l) ? l.map((u) => (u === cur.url ? b.url : u)) : l]));
+        await getDb().query('UPDATE project_items SET media=$2::jsonb WHERE id=$1', [it.id, JSON.stringify(next)]);
+      }
+    }
     res.json(mapAsset(rows[0]));
   }),
 );

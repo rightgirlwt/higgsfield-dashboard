@@ -12,15 +12,17 @@ Written 2026-10-18. Single-user tool for Elle. Not hosted, not for sharing over 
 ## What is NOT in the repo (by design)
 - **API keys** (Higgsfield, ElevenLabs, Anthropic). Entered in Settings, stored in the local database. Never paste them into chat. A new machine needs its own keys.
 - **Project data** (`backend/.data`, git-ignored): Nya's Story, shot board, media library, usage history. A fresh clone starts empty.
+- **Local copies of media** (`backend/.data/files`, git-ignored): **Higgsfield deletes uploads and generated files after about a week**, so the dashboard keeps its own copy of every upload and result and re-uploads any expired input before a generation. Anything made before 2026-10-25 has no copy, so expired references from before then must be uploaded again. Back this folder up with the rest of `.data`.
 - **Billing**: spend is tracked against whatever key is connected. Elle's key bills Elle's account.
 
 ## Spending rules (do not bypass)
 - Elle approves every paid generation. Ask first, state the price.
 - The dashboard enforces this: cost dialog before any generation, a changed price blocks the run, scheduled workflows that spend are skipped, the Director chat has no generate tool.
-- Prices come from Higgsfield's own quote when available, else a saved list (as of 2026-10-12). **The Seedance 2.5 promo ended 2026-10-18, so the saved list prices need refreshing** (Settings, price check).
+- Prices come from Higgsfield's own quote when available, else a saved list. The launch promotion ended 2026-10-18 and the saved list was refreshed on 2026-10-25 (Seedance 2.5 is now $0.2056, $0.4622 and $1.1372 per second at 480p, 720p and 1080p, in every mode). Run Settings, Check prices now and then; Seedance 2.0 reference mode and Kling's saved fallbacks have not been re-based.
 
 ## Current state
 - **Nya's Story** (micro drama): all 7 shots (S1 to S7) are approved. Spend so far about $40.16 ($35.71 generation, $4.45 chat).
+- **Episode 5 is started** ("S1 · Seven Days"), still a draft. It failed twice on 2026-10-25 because its Nya and Marcus reference images had expired (nothing was charged). The originals must be uploaded again in Assets: the Nya sheet (file `hf_20261016_031312_ce9c5eea-2981-4edd-a9ed-2fcc0831f49f.png`) and the Marcus image (`d39ddfe8-28a4-489c-aaaf-2c3577b13920.png`). Replacing an asset image now also updates the shots that use it. Seasons are just board labels, for example "Season 2 · Ep 1 · Scene 1".
 - Earlier S2 and S4 runs timed out while still running at Higgsfield and may have been charged. Elle was to check Higgsfield console usage for request ids 410b19b3... and 9862b820... (unresolved).
 - Dialogue approach ("Flow B"): supplying audio does not drive speech in Seedance 2.5 reference mode (tested). A voice-over mixed under the clips is not built.
 - Not built: "Make a voice line" button on cards; mixing VO under clips with ffmpeg.

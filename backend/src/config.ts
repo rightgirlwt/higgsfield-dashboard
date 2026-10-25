@@ -27,6 +27,13 @@ export const config = {
   pgliteDir: env.PGLITE_DIR ?? './.data/pglite',
   databaseSsl: bool(env.DATABASE_SSL, false),
 
+  /**
+   * Higgsfield deletes uploads and generated files after about a week, so a copy of each one is kept here and re-uploaded
+   * when a saved link has expired. Off in tests (they would try to download from fake addresses).
+   */
+  localCopies: bool(env.LOCAL_COPIES, nodeEnv !== 'test'),
+  filesDir: env.FILES_DIR ?? './.data/files',
+
   /** `dev` = built-in seeded users (never allowed in production). `clerk` = verify Clerk session JWTs. */
   authProvider: (env.AUTH_PROVIDER ?? (isProd ? 'clerk' : 'dev')) as 'dev' | 'clerk',
   clerkSecretKey: env.CLERK_SECRET_KEY ?? '',

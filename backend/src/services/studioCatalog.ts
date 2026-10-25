@@ -502,7 +502,7 @@ export interface ListPrice {
   /** Used when the mode has no `duration` setting but is billed per second (e.g. by the input video's length). */
   assumedSeconds?: number;
 }
-export const PRICES_AS_OF = '2026-10-12';
+export const PRICES_AS_OF = '2026-10-25';
 
 const img$ = (min: number, max = min, byResolution?: Record<string, number>): ListPrice => ({ unit: 'image', min, max, byResolution });
 const vid$ = (min: number, max = min, o: { byResolution?: Record<string, number>; promoEnds?: string; assumedSeconds?: number } = {}): ListPrice => ({ unit: 'second', min, max, ...o });
@@ -533,19 +533,22 @@ export const LIST_PRICES: Record<string, ListPrice> = {
   // Seedance 2.5 is priced by resolution. Higgsfield's own text (checked 2026-10-16): about $0.2056/s at 480p, $0.4622/s at 720p and
   // $1.1372/s at 1080p, before discounts. The saved 480p and 1080p prices are those rates less the current promotion (30% off text and
   // image modes, 16% off reference mode), so 720p is the same discount applied to $0.4622. Refresh after the promotion ends.
-  'bytedance/seedance-2.5/text-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO, byResolution: { '480p': 0.144, '720p': 0.3235, '1080p': 0.7961 } }),
-  'bytedance/seedance-2.5/image-to-video': vid$(0.144, 0.7961, { promoEnds: PROMO, byResolution: { '480p': 0.144, '720p': 0.3235, '1080p': 0.7961 } }),
-  'bytedance/seedance-2.5/reference-to-video': vid$(0.1728, 0.9553, { promoEnds: PROMO, byResolution: { '480p': 0.1728, '720p': 0.3882, '1080p': 0.9553 } }),
-  'bytedance/seedance-2.0/text-to-video': vid$(0.1196, 1.322, { promoEnds: PROMO }),
-  'bytedance/seedance-2.0/image-to-video': vid$(0.1196, 1.322, { promoEnds: PROMO }),
+  // Updated 2026-10-25, after the promotion ended: Higgsfield's own text now gives these standard rates for text and image modes.
+  // The old reference-mode prices were the same standard rates less 16%, so reference mode now costs the same.
+  'bytedance/seedance-2.5/text-to-video': vid$(0.2056, 1.1372, { byResolution: { '480p': 0.2056, '720p': 0.4622, '1080p': 1.1372 } }),
+  'bytedance/seedance-2.5/image-to-video': vid$(0.2056, 1.1372, { byResolution: { '480p': 0.2056, '720p': 0.4622, '1080p': 1.1372 } }),
+  'bytedance/seedance-2.5/reference-to-video': vid$(0.2056, 1.1372, { byResolution: { '480p': 0.2056, '720p': 0.4622, '1080p': 1.1372 } }),
+  // Seedance 2.0 is billed per video token ($0.014 per 1,000 up to 1080p, $0.008 at 4K); per second that is these figures.
+  'bytedance/seedance-2.0/text-to-video': vid$(0.1345, 1.5552, { byResolution: { '480p': 0.1345, '720p': 0.3024, '1080p': 0.6804, '4k': 1.5552 } }),
+  'bytedance/seedance-2.0/image-to-video': vid$(0.1345, 1.5552, { byResolution: { '480p': 0.1345, '720p': 0.3024, '1080p': 0.6804, '4k': 1.5552 } }),
   'bytedance/seedance-2.0/reference-to-video': vid$(0.1435, 1.5864, { promoEnds: PROMO }),
-  'alibaba/wan-3.0/text-to-video': vid$(0.0425, 0.17, { promoEnds: PROMO }),
-  'alibaba/wan-3.0/image-to-video': vid$(0.0425, 0.17, { promoEnds: PROMO }),
-  'alibaba/wan-3.0/reference-to-video': vid$(0.0425, 0.17, { promoEnds: PROMO }),
+  'alibaba/wan-3.0/text-to-video': vid$(0.05, 0.2, { byResolution: { '480p': 0.05, '720p': 0.1, '1080p': 0.2 } }),
+  'alibaba/wan-3.0/image-to-video': vid$(0.05, 0.2, { byResolution: { '480p': 0.05, '720p': 0.1, '1080p': 0.2 } }),
+  'alibaba/wan-3.0/reference-to-video': vid$(0.05, 0.2, { byResolution: { '480p': 0.05, '720p': 0.1, '1080p': 0.2 } }),
   'minimax/h3/text-to-video': vid$(0.1105, 0.1105, { promoEnds: PROMO }),
   'minimax/h3/image-to-video': vid$(0.1105, 0.1105, { promoEnds: PROMO }),
   'minimax/h3/reference-to-video': vid$(0.1105, 0.1105, { promoEnds: PROMO }),
-  'higgsfield/genjutsu/motion-transfer/v1.0': vid$(0.2703, 1.3872, { promoEnds: PROMO, assumedSeconds: 5 }),
+  'higgsfield/genjutsu/motion-transfer/v1.0': vid$(0.318, 1.632, { assumedSeconds: 5, byResolution: { '480p': 0.318, '720p': 0.681, '1080p': 1.632 } }),
   'lightricks/ltx-2.5/text-to-video/fast': vid$(0.09, 0.3, { byResolution: { '720p': 0.09, '1080p': 0.13, '2k': 0.19, '4k': 0.3 } }),
   'lightricks/ltx-2.5/image-to-video/fast': vid$(0.09, 0.3, { byResolution: { '720p': 0.09, '1080p': 0.13, '2k': 0.19, '4k': 0.3 } }),
   'lightricks/ltx-2.5/text-to-video/pro': vid$(0.12, 0.17, { byResolution: { '720p': 0.12, '1080p': 0.17 } }),

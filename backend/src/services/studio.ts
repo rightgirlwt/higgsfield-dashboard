@@ -7,6 +7,7 @@ import { getHfConfig, getStatus, simStatus, simSubmit, submit, TERMINAL, type Hf
 import type { Work } from './jobs';
 import { getSetting, putSetting } from './settings';
 import { billedSeconds, buildRequest, getStudioModel, LIST_PRICES, outputsPerRequest, pickMode, resolveMedia, resolveSettings, unitPrice, type MediaRole } from './studioCatalog';
+import { refreshExpiredMedia, saveLocalCopyFromUrl } from './mediaStore';
 import { recordUsage } from './usage';
 
 export type Prices = Record<string, number | null>;
@@ -84,11 +85,20 @@ export function prepareGeneration(p: GenerateParams) {
  */
 export async function runStudioGeneration(orgId: string, ctx: { runId: string; log: Log }, p: GenerateParams): Promise<GenerateResult> {
   const { runId, log } = ctx;
-  const { model, mode, prompt, settings, path, body, requests: n } = prepareGeneration(p);
-
   const cfg: HfConfig | null = await getHfConfig(orgId);
   const simulated = cfg === null;
   if (simulated) await log('warn', 'Higgsfield API key / base URL not configured — producing SIMULATED placeholder results');
+
+  // Higgsfield deletes files after about a week. Re-upload any expired input from the saved copy before submitting,
+  // or stop here (before anything is charged) if no copy exists.
+  if (cfg && p.media) {
+    const fresh = await refreshExpiredMedia(cfg, p.media);
+    if (fresh.rehosted) {
+      await log('info', `${fresh.rehosted} input file${fresh.rehosted > 1 ? 's had' : ' had'} expired at Higgsfield and ${fresh.rehosted > 1 ? 'were' : 'was'} re-uploaded from the saved copy`);
+      p = { ...p, media: fresh.media as GenerateParams['media'] };
+    }
+  }
+  const { model, mode, prompt, settings, path, body, requests: n } = prepareGeneration(p);
 
   const failures: string[] = [];
   const pending: Pending[] = [];
@@ -139,6 +149,7 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
         ],
       );
       assets.push({ id: rows[0].id, url: u.url, thumbUrl: thumb, type: u.type });
+      void saveLocalCopyFromUrl(u.url); // Higgsfield removes results after about a week, so keep our own copy
     }
     succeeded++;
     await log('info', `Request ${r.id.slice(0, 8)} completed`);

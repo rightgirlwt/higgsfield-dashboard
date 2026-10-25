@@ -108,9 +108,10 @@ describe('studio catalog (data-driven)', () => {
     const soul = getStudioModel('soul-2')!.modes[0];
     expect(unitPrice(soul, { resolution: '1080p' }, null)).toEqual({ amount: 0.0057, precision: 'exact', basis: 'list' });
     const seed = getStudioModel('seedance-2-5')!.modes[0];
-    expect(unitPrice(seed, { resolution: '480p' }, null)).toEqual({ amount: 0.144, precision: 'exact', basis: 'list' });
-    expect(unitPrice(seed, { resolution: '720p' }, null)).toEqual({ amount: 0.3235, precision: 'exact', basis: 'list' }); // 720p costs more than 2x the 480p rate
-    expect(unitPrice(getStudioModel('seedance-2-5')!.modes[2], { resolution: '720p' }, null)).toEqual({ amount: 0.3882, precision: 'exact', basis: 'list' });
+    // Standard rates from Higgsfield's own text on 2026-10-25, after the launch promotion ended.
+    expect(unitPrice(seed, { resolution: '480p' }, null)).toEqual({ amount: 0.2056, precision: 'exact', basis: 'list' });
+    expect(unitPrice(seed, { resolution: '720p' }, null)).toEqual({ amount: 0.4622, precision: 'exact', basis: 'list' }); // 720p costs more than 2x the 480p rate
+    expect(unitPrice(getStudioModel('seedance-2-5')!.modes[2], { resolution: '720p' }, null)).toEqual({ amount: 0.4622, precision: 'exact', basis: 'list' });
     expect(unitPrice(seed, {}, 0.5)).toEqual({ amount: 0.5, precision: 'exact', basis: 'admin' });
     const motion = getStudioModel('kling-3-motion-std')!;
     expect(billedSeconds(motion, motion.modes[0], {})).toBe(5); // billed by the input video's length: assumption
@@ -291,7 +292,7 @@ describe('studio API (simulated mode)', () => {
 
   it('exposes list prices per mode in the catalog', async () => {
     const m = (await call('GET', '/studio/models', { as: 'viewer' })).json;
-    expect(m.pricesAsOf).toBe('2026-10-12');
+    expect(m.pricesAsOf).toBe('2026-10-25');
     const soul = m.models.find((x: any) => x.id === 'soul-2');
     expect(soul.modes[0].price).toMatchObject({ unit: 'image', min: 0.0032, max: 0.0057, byResolution: { '720p': 0.0032, '1080p': 0.0057 } });
     expect(m.models.find((x: any) => x.id === 'kling-3-turbo').modes[0].price).toMatchObject({ unit: 'second', promoEnds: '2026-10-18' });

@@ -314,6 +314,22 @@ describe('reference assets', () => {
     expect((await call('DELETE', `/projects/${ad.id}/assets/${mia.json.id}`, { as: 'user' })).status).toBe(404); // other project
     expect((await call('DELETE', `/projects/${drama.id}/assets/${mia.json.id}`, { as: 'user' })).status).toBe(204);
   });
+
+  it('replacing an asset image also replaces the old link on the shots that use it', async () => {
+    const old = 'https://d3snorpfx4xhv8.cloudfront.net/org/old-face.png';
+    const fresh = 'https://d3snorpfx4xhv8.cloudfront.net/org/new-face.png';
+    const asset = await call('POST', `/projects/${drama.id}/assets`, { as: 'user', body: { kind: 'character', name: 'Nya', url: old } });
+    const shot = await call('POST', `/projects/${drama.id}/items`, { as: 'user', body: { group: 'Ep 9', title: 'Uses Nya', prompt: 'She turns', modelId: 'kling-3-std', mode: 'image', media: { start: [old] } } });
+    expect(shot.status).toBe(201);
+    const other = await call('POST', `/projects/${drama.id}/items`, { as: 'user', body: { group: 'Ep 9', title: 'Other face', prompt: 'He turns', modelId: 'kling-3-std', mode: 'image', media: { start: ['https://x.test/other.png'] } } });
+    await call('PUT', `/projects/${drama.id}/assets/${asset.json.id}`, { as: 'user', body: { url: fresh } });
+    const snap = (await call('GET', `/projects/${drama.id}`, { as: 'user' })).json;
+    const byTitle = Object.fromEntries(snap.items.map((i: any) => [i.title, i]));
+    expect(byTitle['Uses Nya'].media.start).toEqual([fresh]);
+    expect(byTitle['Other face'].media.start).toEqual(['https://x.test/other.png']);
+    void other;
+    await call('DELETE', `/projects/${drama.id}/assets/${asset.json.id}`, { as: 'user' });
+  });
 });
 
 describe('director chat (Claude with tools)', () => {
