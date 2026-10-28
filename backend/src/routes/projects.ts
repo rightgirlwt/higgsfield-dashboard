@@ -9,6 +9,7 @@ import {
   addItems, ASSET_KINDS, cleanBrief, emptyBrief, estimateItems, expandVariants, itemCreate, itemUpdate, loadItem, loadItems, loadProject, loadTakes,
   mapAsset, mapItem, mapProject, projectSpend, startGeneration, touchProject, updateItem,
 } from '../services/projects';
+import { inWorkspace } from '../services/workspaces';
 import { likePattern, uuidParam } from './util';
 
 export const projects = Router();
@@ -27,6 +28,7 @@ projects.get(
       params.push(likePattern(req.query.q.trim()));
       where += ' AND (p.name ILIKE $2 OR p.description ILIKE $2)';
     }
+    where += ` AND ${inWorkspace(req.workspace!, 'p', params)}`;
     const { rows } = await getDb().query<any>(
       `SELECT p.*,
          (SELECT COUNT(*)::int FROM project_items i WHERE i.project_id=p.id) AS item_count,
@@ -53,8 +55,8 @@ projects.post(
     const b = createBody.parse(req.body);
     const u = req.user!;
     const { rows } = await getDb().query(
-      `INSERT INTO projects (org_id, name, type, description, brief, budget_usd, aspect, created_by) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8) RETURNING *`,
-      [u.orgId, b.name, b.type, b.description, JSON.stringify(emptyBrief(b.type)), b.budgetUsd, b.aspect ?? PROJECT_TYPES[b.type].defaultAspect, u.id],
+      `INSERT INTO projects (org_id, name, type, description, brief, budget_usd, aspect, created_by, workspace_id) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9) RETURNING *`,
+      [u.orgId, b.name, b.type, b.description, JSON.stringify(emptyBrief(b.type)), b.budgetUsd, b.aspect ?? PROJECT_TYPES[b.type].defaultAspect, u.id, req.workspace!.id],
     );
     res.status(201).json(mapProject(rows[0]));
   }),

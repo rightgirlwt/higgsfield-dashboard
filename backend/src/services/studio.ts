@@ -31,6 +31,8 @@ export interface GenerateParams {
   workflowId?: string | null;
   /** Extra metadata stored on each saved asset, e.g. { projectId, itemId } for the project board. */
   metadata?: Record<string, unknown>;
+  /** Workspace the results are saved in. A project's own workspace wins when the run belongs to a project. */
+  workspaceId?: string | null;
 }
 
 export interface GeneratedAsset {
@@ -127,6 +129,18 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
   const deadline = Date.now() + config.studioDeadlineMs;
   let live = [...pending];
 
+  let workspaceId: string | null | undefined;
+  const workspaceFor = async (): Promise<string | null> => {
+    if (workspaceId !== undefined) return workspaceId;
+    workspaceId = p.workspaceId ?? null;
+    const projectId = p.metadata?.projectId;
+    if (typeof projectId === 'string') {
+      const r = await getDb().query<{ workspace_id: string | null }>('SELECT workspace_id FROM projects WHERE id=$1 AND org_id=$2', [projectId, orgId]);
+      if (r.rows[0]?.workspace_id) workspaceId = r.rows[0].workspace_id;
+    }
+    return workspaceId;
+  };
+
   const finish = async (r: Pending, urls: { url: string; type: 'photo' | 'video' }[]) => {
     if (urls.length === 0) {
       failures.push('The platform reported completion but returned no media');
@@ -140,12 +154,12 @@ export async function runStudioGeneration(orgId: string, ctx: { runId: string; l
       }
       const thumb = u.type === 'photo' ? u.url : placeholderImage(title, 'video', r.id);
       const { rows } = await getDb().query<{ id: string }>(
-        `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workflow_id, run_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9) RETURNING id`,
+        `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workflow_id, run_id, workspace_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10) RETURNING id`,
         [
           orgId, u.type, title, u.url, thumb, ['studio', model.id, ...(p.metadata?.projectId ? ['project'] : [])],
           JSON.stringify({ ...p.metadata, source: 'studio', prompt, model: model.id, modelLabel: model.label, mode: mode.id, modeLabel: mode.label, settings, requestId: r.id, simulated }),
-          p.workflowId ?? null, runId,
+          p.workflowId ?? null, runId, await workspaceFor(),
         ],
       );
       assets.push({ id: rows[0].id, url: u.url, thumbUrl: thumb, type: u.type });

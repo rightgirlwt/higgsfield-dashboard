@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowUpRight, Download, FileText, FlaskConical, Play } 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useAuth } from '../auth/context';
 import { CreditsPanel } from '../components/CreditsPanel';
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, PageHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
@@ -49,6 +50,8 @@ const AXIS = cssColor('slate-400');
 export default function Overview() {
   useDocumentTitle('Overview');
   const toast = useToast();
+  const { me } = useAuth();
+  const isAdmin = me.role === 'admin';
   const { runTick, usageTick, snapshot, connected } = useRealtime();
   const [range, setRange] = useState<Range>('30d');
   const [by, setBy] = useState<By>('model');
@@ -132,7 +135,7 @@ export default function Overview() {
                   </div>
                 ) : (
                   <p className="mt-1 text-xs text-white/80">
-                    No budget set · <Link className="underline" to="/settings">set one</Link>
+                    No budget set{isAdmin && <> · <Link className="underline" to="/settings">set one</Link></>}
                   </p>
                 )}
               </Kpi>

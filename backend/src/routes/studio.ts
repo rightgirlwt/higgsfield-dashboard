@@ -65,7 +65,7 @@ studio.post(
   '/generate',
   wrap(async (req, res) => {
     const b = generateBody.parse(req.body);
-    const params = { ...b, media: b.media as Partial<Record<MediaRole, string[]>> };
+    const params = { ...b, media: b.media as Partial<Record<MediaRole, string[]>>, workspaceId: req.workspace!.id };
     // Validate up front so mistakes are a 400, not a failed run.
     const prepared = prepareGeneration(params);
     const u = req.user!;
@@ -120,8 +120,8 @@ studio.post(
       // Keep it in the library so it can be reused as a start frame / reference.
       const type = spec.kind === 'video' ? 'video' : 'photo';
       const { rows } = await getDb().query<{ id: string }>(
-        `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING id`,
-        [org, type, name, url, type === 'photo' ? url : placeholderImage(name, 'video'), ['upload', 'reference'], JSON.stringify({ source: 'upload', bytes: body.length, retention: 'temporary' })],
+        `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workspace_id) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) RETURNING id`,
+        [org, type, name, url, type === 'photo' ? url : placeholderImage(name, 'video'), ['upload', 'reference'], JSON.stringify({ source: 'upload', bytes: body.length, retention: 'temporary' }), req.workspace!.id],
       );
       id = rows[0].id;
     }

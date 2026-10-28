@@ -266,6 +266,29 @@ CREATE TABLE chat_messages (
 CREATE INDEX chat_messages_thread_idx ON chat_messages(thread_id, id);
 `,
   },
+  {
+    version: 4,
+    name: 'workspaces',
+    // One login sees every workspace. Existing projects and media go to the first one (Right Girl Media).
+    sql: `
+CREATE TABLE workspaces (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  position integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (org_id, name)
+);
+INSERT INTO workspaces (org_id, name, position) SELECT id, 'Right Girl Media', 0 FROM organizations;
+INSERT INTO workspaces (org_id, name, position) SELECT id, 'Greene Legal Group', 1 FROM organizations;
+ALTER TABLE projects ADD COLUMN workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL;
+ALTER TABLE media_assets ADD COLUMN workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL;
+UPDATE projects SET workspace_id = (SELECT w.id FROM workspaces w WHERE w.org_id = projects.org_id AND w.position = 0);
+UPDATE media_assets SET workspace_id = (SELECT w.id FROM workspaces w WHERE w.org_id = media_assets.org_id AND w.position = 0);
+CREATE INDEX projects_workspace_idx ON projects(workspace_id, updated_at DESC);
+CREATE INDEX media_workspace_idx ON media_assets(workspace_id, created_at DESC);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

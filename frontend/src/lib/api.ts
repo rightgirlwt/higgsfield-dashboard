@@ -24,11 +24,30 @@ export function configureApi(opts: { getToken: TokenProvider; onUnauthorized: ()
 
 const BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '';
 
+const WORKSPACE_KEY = 'workspace';
+/** The workspace this browser is working in. The server falls back to the first one when this is empty or unknown. */
+export function getWorkspaceId(): string {
+  try {
+    return localStorage.getItem(WORKSPACE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+export function setWorkspaceId(id: string): void {
+  try {
+    localStorage.setItem(WORKSPACE_KEY, id);
+  } catch {
+    /* storage unavailable: the first workspace is used */
+  }
+}
+
 async function request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
   const token = await tokenProvider();
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
+  const workspace = getWorkspaceId();
+  if (workspace) headers['X-Workspace'] = workspace;
   let res: Response;
   try {
     res = await fetch(`${BASE}/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
@@ -71,7 +90,7 @@ export const api = {
     const token = await tokenProvider();
     let res: Response;
     try {
-      res = await fetch(`${BASE}/api${path}`, { method: 'POST', headers: { 'Content-Type': contentType || file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: file });
+      res = await fetch(`${BASE}/api${path}`, { method: 'POST', headers: { 'Content-Type': contentType || file.type, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(getWorkspaceId() ? { 'X-Workspace': getWorkspaceId() } : {}) }, body: file });
     } catch {
       throw new ApiError(0, 'Cannot reach the server. Check that the backend is running.', 'network');
     }

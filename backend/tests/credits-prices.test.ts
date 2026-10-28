@@ -252,7 +252,7 @@ describe('promotion reminder', () => {
 });
 
 describe('credits', () => {
-  const credits = async (as = 'viewer') => (await call('GET', '/dashboard/credits', { as })).json as any[];
+  const credits = async (as = 'admin') => (await call('GET', '/dashboard/credits', { as })).json as any[];
   const of = (rows: any[], p: string) => rows.find((r) => r.provider === p);
 
   it('starts empty and only admins can set a balance', async () => {

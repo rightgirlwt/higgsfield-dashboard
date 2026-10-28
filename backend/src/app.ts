@@ -18,6 +18,7 @@ import { search } from './routes/search';
 import { settings, team } from './routes/settings';
 import { studio } from './routes/studio';
 import { workflows } from './routes/workflows';
+import { attachWorkspace, listWorkspaces } from './services/workspaces';
 
 export function createApp() {
   const app = express();
@@ -59,8 +60,14 @@ export function createApp() {
   }
 
   // ---- authenticated ---------------------------------------------------------------------------
-  api.use(authenticate, writesRequireUser);
+  api.use(authenticate, writesRequireUser, attachWorkspace);
   api.get('/me', (req, res) => res.json({ ...req.user, authProvider: config.authProvider }));
+  api.get(
+    '/workspaces',
+    wrap(async (req, res) => {
+      res.json({ workspaces: await listWorkspaces(req.user!.orgId), current: req.workspace!.id });
+    }),
+  );
   api.get('/models', (_req, res) => res.json(MODELS));
 
   const runLimiter = config.isTest ? (_q: any, _r: any, n: any) => n() : rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true, legacyHeaders: false });

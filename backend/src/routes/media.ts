@@ -4,6 +4,7 @@ import { getDb } from '../ctx';
 import { badRequest, notFound, wrap } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { createUploadUrl } from '../services/storage';
+import { inWorkspace } from '../services/workspaces';
 import { isUuid, likePattern, toCsv, uuidParam } from './util';
 
 export const media = Router();
@@ -16,6 +17,7 @@ const mapMedia = (m: any) => ({
 function filters(req: any, startIdx = 1) {
   const params: unknown[] = [req.user.orgId];
   const where: string[] = ['m.org_id = $1'];
+  where.push(inWorkspace(req.workspace, 'm', params));
   const add = (sql: string, v: unknown) => (params.push(v), where.push(sql.replace('?', `$${params.length}`)));
   if (req.query.type === 'photo' || req.query.type === 'video') add('m.type = ?', req.query.type);
   if (typeof req.query.tag === 'string' && req.query.tag) add('? = ANY(m.tags)', req.query.tag.toLowerCase());
@@ -71,9 +73,10 @@ media.get(
 media.get(
   '/tags',
   wrap(async (req, res) => {
+    const params: unknown[] = [req.user!.orgId];
     const { rows } = await getDb().query<{ tag: string; n: number }>(
-      `SELECT t AS tag, COUNT(*)::int AS n FROM media_assets, unnest(tags) AS t WHERE org_id=$1 GROUP BY t ORDER BY n DESC, t LIMIT 100`,
-      [req.user!.orgId],
+      `SELECT t AS tag, COUNT(*)::int AS n FROM media_assets m, unnest(m.tags) AS t WHERE m.org_id=$1 AND ${inWorkspace(req.workspace!, 'm', params)} GROUP BY t ORDER BY n DESC, t LIMIT 100`,
+      params,
     );
     res.json(rows);
   }),
@@ -122,9 +125,9 @@ media.post(
       })
       .parse(req.body);
     const { rows } = await getDb().query(
-      `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workflow_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) RETURNING *`,
-      [req.user!.orgId, b.type, b.title, b.url, b.thumbUrl ?? (b.type === 'photo' ? b.url : placeholderImage(b.title, 'video')), [...new Set(b.tags.map((t) => t.toLowerCase()))], JSON.stringify(b.metadata), b.workflowId ?? null],
+      `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workflow_id, workspace_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9) RETURNING *`,
+      [req.user!.orgId, b.type, b.title, b.url, b.thumbUrl ?? (b.type === 'photo' ? b.url : placeholderImage(b.title, 'video')), [...new Set(b.tags.map((t) => t.toLowerCase()))], JSON.stringify(b.metadata), b.workflowId ?? null, req.workspace!.id],
     );
     res.status(201).json(mapMedia(rows[0]));
   }),

@@ -394,9 +394,9 @@ function Team() {
                     <td className="py-3 pr-3">
                       {isAdmin ? (
                         <Select aria-label={`Role for ${u.name}`} className="w-28" value={u.role} onChange={(e) => changeRole(u, e.target.value as Role)}>
-                          <option value="admin">Admin</option><option value="user">User</option><option value="viewer">Viewer</option>
+                          <option value="admin">Admin</option><option value="user">Team</option>{u.role === 'viewer' && <option value="viewer">Viewer</option>}
                         </Select>
-                      ) : <Badge tone={u.role === 'admin' ? 'violet' : u.role === 'user' ? 'cyan' : 'slate'}>{u.role}</Badge>}
+                      ) : <Badge tone={u.role === 'admin' ? 'violet' : u.role === 'user' ? 'cyan' : 'slate'}>{u.role === 'user' ? 'team' : u.role}</Badge>}
                     </td>
                     <td className="py-3 text-right">{isAdmin && u.id !== me.id && <Button size="sm" variant="ghost" aria-label={`Remove ${u.name}`} onClick={() => remove(u)}><Trash2 className="h-4 w-4 text-rose-300" aria-hidden /></Button>}</td>
                   </tr>
@@ -405,10 +405,9 @@ function Team() {
             </table>
           </div>
         )}
-        <dl className="mt-5 grid gap-2 text-xs text-slate-500 sm:grid-cols-3">
-          <div><dt className="font-semibold text-slate-300">Admin</dt><dd>Everything, incl. keys, team, billing</dd></div>
-          <div><dt className="font-semibold text-slate-300">User</dt><dd>Create/run prompts & workflows</dd></div>
-          <div><dt className="font-semibold text-slate-300">Viewer</dt><dd>Read-only</dd></div>
+        <dl className="mt-5 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
+          <div><dt className="font-semibold text-slate-300">Admin</dt><dd>Everything, including changing keys, prices, budget, balances and team</dd></div>
+          <div><dt className="font-semibold text-slate-300">Team</dt><dd>Create, edit and generate in every workspace. Sees prices, charges, budget and balances, for reports. Cannot see or change keys, and cannot change prices, budget or balances</dd></div>
         </dl>
       </Card>
       {isAdmin && (
@@ -417,7 +416,7 @@ function Team() {
           <div className="space-y-3">
             <Field label="Email" htmlFor="t-email"><Input id="t-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
             <Field label="Name (optional)" htmlFor="t-name"><Input id="t-name" value={name} onChange={(e) => setName(e.target.value)} /></Field>
-            <Field label="Role" htmlFor="t-role"><Select id="t-role" value={role} onChange={(e) => setRole(e.target.value as Role)}><option value="admin">Admin</option><option value="user">User</option><option value="viewer">Viewer</option></Select></Field>
+            <Field label="Role" htmlFor="t-role"><Select id="t-role" value={role} onChange={(e) => setRole(e.target.value as Role)}><option value="admin">Admin</option><option value="user">Team</option></Select></Field>
             <Button variant="primary" loading={busy} disabled={!email.includes('@')} onClick={invite}><UserPlus className="h-4 w-4" aria-hidden /> Add member</Button>
           </div>
         </Card>

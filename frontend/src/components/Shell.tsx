@@ -2,7 +2,7 @@ import { Activity, Bell, Camera, Clapperboard, LayoutGrid, LogOut, Menu, Message
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/context';
-import { api } from '../lib/api';
+import { api, setWorkspaceId } from '../lib/api';
 import { ms, timeAgo } from '../lib/format';
 import { useApi } from '../lib/hooks';
 import { useTheme } from '../lib/theme';
@@ -22,6 +22,36 @@ const nav = [
   { to: '/monitoring', label: 'Monitoring', icon: Activity },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
+
+interface WorkspaceList {
+  workspaces: { id: string; name: string }[];
+  current: string;
+}
+
+/** Projects and the media library show one workspace at a time. Changing it reloads the page so every screen starts fresh. */
+function WorkspaceSwitcher() {
+  const list = useApi<WorkspaceList>('/workspaces');
+  if (!list.data || list.data.workspaces.length < 2) return null;
+  const change = (id: string) => {
+    setWorkspaceId(id);
+    window.location.assign('/');
+  };
+  return (
+    <div className="mb-6">
+      <label htmlFor="workspace" className="mb-1.5 block text-xs uppercase tracking-wider text-white/70">Workspace</label>
+      <select
+        id="workspace"
+        value={list.data.current}
+        onChange={(e) => change(e.target.value)}
+        className="w-full rounded-2xl border-0 bg-white px-3.5 py-2.5 text-sm font-semibold text-cyan-600 shadow-md focus:outline-none focus:ring-2 focus:ring-white/70"
+      >
+        {list.data.workspaces.map((w) => (
+          <option key={w.id} value={w.id}>{w.name}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 function SystemPanel() {
   const { snapshot, connected } = useRealtime();
@@ -147,6 +177,7 @@ export function Shell() {
           <div className="text-lg font-semibold leading-tight text-white">Higgsfield</div>
         </div>
       </div>
+      <WorkspaceSwitcher />
       <nav aria-label="Primary" className="space-y-1.5">
         {nav.map(({ to, label, icon: Icon, end }) => (
           <NavLink key={to} to={to} end={end} className={link} onClick={() => setMobileNav(false)}>
@@ -203,7 +234,7 @@ export function Shell() {
             <div className="flex items-center gap-2">
               <div className="hidden text-right sm:block">
                 <div className="text-sm font-medium leading-tight">{me.name}</div>
-                <div className="text-xs capitalize text-slate-400">{me.role}</div>
+                <div className="text-xs capitalize text-slate-400">{me.role === 'user' ? 'team' : me.role}</div>
               </div>
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-cyan-700 text-sm font-semibold text-white" aria-hidden>{initials}</div>
               <IconButton label="Sign out" onClick={() => void signOut()}>

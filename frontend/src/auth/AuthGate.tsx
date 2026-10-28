@@ -119,7 +119,7 @@ function DevAuth({ children }: { children: ReactNode }) {
 const roleTone = { admin: 'violet', user: 'cyan', viewer: 'slate' } as const;
 const roleBlurb: Record<Role, string> = {
   admin: 'Full access: settings, API keys, team and billing',
-  user: 'Create and run prompts and workflows',
+  user: 'Team: create, edit and generate; sees prices, charges, budget and balances, but not keys',
   viewer: 'Read-only access',
 };
 
