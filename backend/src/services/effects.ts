@@ -9,6 +9,7 @@ import { badRequest, HttpError, notFound } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { logger } from '../logger';
 import { buildAss, type Captions, captionsSchema, DEFAULT_CAPTIONS, styleSchema } from './captions';
+import { approveDraft, describeChanges, type Draft, nextNumber, requestDraftChanges, submitDraft } from './drafts';
 import { listFonts } from './fonts';
 
 /**
@@ -139,6 +140,8 @@ export interface EditVideo {
   /** A name the team chooses; falls back to the file name. */
   title?: string;
   addedBy?: string;
+  /** Every render is kept as a numbered draft (v1, v2, ...) so versions can be compared and one approved. */
+  drafts?: Draft[];
 }
 
 const VIDEO_TYPES: Record<string, string> = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm' };
@@ -254,10 +257,10 @@ export async function getWords(videoId: string): Promise<Word[]> {
 }
 
 export async function renameVideo(id: string, title: string): Promise<EditVideo> {
-  const { record } = await videoFile(id);
-  record.title = title.replace(/\s+/g, ' ').trim().slice(0, 120) || undefined;
-  await writeRecord(record);
-  return record;
+  return updateRecord(id, (record) => {
+    record.title = title.replace(/\s+/g, ' ').trim().slice(0, 120) || undefined;
+    return record;
+  });
 }
 
 export { captionsSchema };
@@ -307,11 +310,33 @@ export async function getCuts(videoId: string): Promise<number[]> {
 }
 export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema, captions: captionsSchema.optional() });
 
+/** Read-change-write of one video's record, one at a time per video so two renders finishing together keep both drafts. */
+const recordLocks = new Map<string, Promise<unknown>>();
+async function updateRecord<T>(id: string, change: (record: EditVideo) => T): Promise<T> {
+  const prev = recordLocks.get(id) ?? Promise.resolve();
+  const next = prev.catch(() => undefined).then(async () => {
+    const { record } = await videoFile(id);
+    const result = change(record);
+    await writeRecord(record);
+    return result;
+  });
+  recordLocks.set(id, next);
+  try {
+    return await next;
+  } finally {
+    if (recordLocks.get(id) === next) recordLocks.delete(id);
+  }
+}
+
+export const submitVideoDraft = (id: string, n: number) => updateRecord(id, (r) => submitDraft(r.drafts, n));
+export const approveVideoDraft = (id: string, n: number) => updateRecord(id, (r) => approveDraft(r.drafts, n));
+export const requestVideoDraftChanges = (id: string, n: number, note: string) => updateRecord(id, (r) => requestDraftChanges(r.drafts, n, note));
+
 export async function savePlan(id: string, plan: EditPlan): Promise<EditVideo> {
-  const { record } = await videoFile(id);
-  record.plan = plan;
-  await writeRecord(record);
-  return record;
+  return updateRecord(id, (record) => {
+    record.plan = plan;
+    return record;
+  });
 }
 
 // ---- previews -------------------------------------------------------------------------------------------
@@ -413,6 +438,8 @@ export interface RenderJob {
   message: string;
   fileName?: string;
   mediaId?: string;
+  /** The draft number this render became (v1, v2, ...). */
+  draft?: number;
 }
 const jobs = new Map<string, RenderJob>();
 export const getJob = (id: string) => jobs.get(id) ?? null;
@@ -424,6 +451,8 @@ export interface RenderInput {
   steps: Step[];
   label: Label;
   captions?: Captions;
+  /** Who pressed Render; shown on the draft. */
+  createdBy?: string;
 }
 
 /** Starts the render in the background and returns at once; poll the job for progress. */
@@ -464,6 +493,16 @@ export async function startRender(r: RenderInput): Promise<RenderJob> {
         `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workspace_id) VALUES ($1,'video',$2,$3,$4,$5,$6::jsonb,$7) RETURNING id`,
         [r.orgId, title, url, placeholderImage(title, 'video'), ['edit', 'effects'], JSON.stringify({ source: 'edit', effects: r.steps.map((s) => s.fx), labeled: r.label.enabled, captions: captions.enabled, sourceVideo: record.name }), r.workspaceId],
       );
+      const settings: EditPlan = { steps: r.steps, label: r.label, captions };
+      job.draft = await updateRecord(r.videoId, (rec) => {
+        const n = nextNumber(rec.drafts);
+        const prev = rec.drafts?.[rec.drafts.length - 1];
+        rec.drafts = [
+          ...(rec.drafts ?? []),
+          { n, fileName: `${id}.mp4`, mediaId: rows[0].id, createdAt: new Date().toISOString(), createdBy: (r.createdBy ?? '').slice(0, 80), status: 'draft', note: '', plan: settings, changes: describeChanges(prev?.plan, settings) },
+        ];
+        return n;
+      });
       job.fileName = `${id}.mp4`;
       job.mediaId = rows[0].id;
       job.status = 'done';

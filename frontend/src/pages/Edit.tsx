@@ -30,7 +30,17 @@ interface BeatCounts {
   changes_needed: number;
   approved: number;
 }
+interface Draft {
+  n: number;
+  fileName: string;
+  createdAt: string;
+  createdBy: string;
+  status: BeatStatus;
+  note: string;
+  changes: string[];
+}
 interface Video {
+  drafts?: Draft[];
   id: string;
   name: string;
   title?: string;
@@ -54,6 +64,7 @@ interface Job {
   message: string;
   fileName?: string;
   mediaId?: string;
+  draft?: number;
 }
 interface WorkspaceList {
   workspaces: { id: string; name: string }[];
@@ -238,7 +249,7 @@ export default function Edit() {
   useEffect(() => {
     if (!jobId) return;
     const timer = setInterval(() => {
-      api.get<Job>(`/edit/jobs/${jobId}`).then(setJob).catch((e) => setJob({ id: jobId, status: 'failed', message: errorMessage(e) }));
+      api.get<Job>(`/edit/jobs/${jobId}`).then((j) => { setJob(j); if (j.status === 'done') videos.reload(); }).catch((e) => setJob({ id: jobId, status: 'failed', message: errorMessage(e) }));
     }, 2500);
     return () => clearInterval(timer);
   }, [jobId]);
@@ -443,13 +454,16 @@ export default function Edit() {
                     {job.status === 'failed' && <p className="text-rose-300">The render failed: {job.message}</p>}
                     {job.status === 'done' && job.fileName && (
                       <div className="space-y-2">
-                        <p className="text-emerald-300">Done. It is saved in the <Link className="underline" to="/media">Media</Link> library. Watch it before you post.</p>
+                        <p className="text-emerald-300">Done{job.draft ? `: this is draft v${job.draft}` : ''}. It is saved in the <Link className="underline" to="/media">Media</Link> library and listed under Drafts below. Watch it before you post.</p>
                         <video controls className="max-h-[32rem] rounded-xl border border-slate-800" src={`/api/edit/files/${job.fileName}`} />
                       </div>
                     )}
                   </div>
                 )}
               </Card>
+
+              <Drafts videoId={videoId} drafts={video?.drafts ?? []} canWrite={canWrite} isReviewer={isReviewer} onChanged={videos.reload} />
+
             </div>
 
             <ReviewPanel
@@ -678,12 +692,100 @@ function EditList({ videos, loading, canWrite, uploading, workspaceName, onOpen,
                     )}
                   </div>
                   <div className="mt-1 text-xs text-slate-400">{v.beats.total ? `${v.beats.approved} of ${v.beats.total} beats approved` : 'Open to add beats'}</div>
+                  {v.drafts?.length ? (
+                    <div className="mt-1 text-xs text-slate-400">
+                      {(() => {
+                        const last = v.drafts[v.drafts.length - 1];
+                        return `${v.drafts.length} ${v.drafts.length === 1 ? 'draft' : 'drafts'} · v${last.n} ${STATUS[last.status].label.toLowerCase()}`;
+                      })()}
+                    </div>
+                  ) : null}
                 </button>
               </li>
             );
           })}
         </ul>
       )}
+    </Card>
+  );
+}
+
+/** Every render is kept as a numbered draft. The editor submits one, the admin approves it or asks for changes; any two can be watched side by side. */
+function Drafts({ videoId, drafts, canWrite, isReviewer, onChanged }: { videoId: string; drafts: Draft[]; canWrite: boolean; isReviewer: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const [pick, setPick] = useState<number[]>([]);
+  const [asking, setAsking] = useState<number | null>(null);
+  const [note, setNote] = useState('');
+  const list = [...drafts].sort((a, b) => b.n - a.n);
+
+  async function act(path: string, body?: object, ok?: string) {
+    try {
+      await api.post(`/edit/videos/${videoId}/drafts/${path}`, body ?? {});
+      if (ok) toast.success(ok);
+      onChanged();
+      return true;
+    } catch (e) {
+      toast.error(errorMessage(e));
+      return false;
+    }
+  }
+  const toggle = (n: number) => setPick((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n].slice(-2)));
+  const [left, right] = [...pick].sort((a, b) => a - b).map((n) => drafts.find((d) => d.n === n));
+
+  return (
+    <Card className="p-5">
+      <CardHeader eyebrow="Versions" title="Drafts" />
+      {list.length === 0 ? (
+        <p className="text-sm text-slate-400">Each time you render, the result is kept here as v1, v2 and so on, so you can compare versions and send the one you like for review.</p>
+      ) : (
+        <ul className="space-y-3">
+          {list.map((d) => (
+            <li key={d.n} className="rounded-xl border border-slate-800 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold">v{d.n}</span>
+                  <Badge tone={STATUS[d.status].tone}>{STATUS[d.status].label}</Badge>
+                  <span className="text-xs text-slate-500">{d.createdBy ? `${d.createdBy} · ` : ''}{timeAgo(d.createdAt)}</span>
+                </div>
+                <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <input type="checkbox" checked={pick.includes(d.n)} onChange={() => toggle(d.n)} /> Compare
+                </label>
+              </div>
+              <ul className="mt-2 list-inside list-disc text-xs text-slate-400">{d.changes.map((c) => <li key={c}>{c}</li>)}</ul>
+              {d.status === 'changes_needed' && d.note && <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-200">Changes asked for: {d.note}</p>}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <a className="inline-flex" href={`/api/edit/files/${d.fileName}`} target="_blank" rel="noreferrer"><Button size="sm">Watch v{d.n}</Button></a>
+                {canWrite && (d.status === 'draft' || d.status === 'changes_needed') && (
+                  <Button size="sm" variant="primary" onClick={() => void act(`${d.n}/submit`, {}, `v${d.n} sent for review`)}><Send className="h-4 w-4" aria-hidden /> Submit for review</Button>
+                )}
+                {isReviewer && d.status === 'in_review' && (
+                  <>
+                    <Button size="sm" variant="primary" onClick={() => void act(`${d.n}/approve`, {}, `v${d.n} approved`)}><Check className="h-4 w-4" aria-hidden /> Approve v{d.n}</Button>
+                    <Button size="sm" onClick={() => { setAsking(asking === d.n ? null : d.n); setNote(''); }}>Request changes</Button>
+                  </>
+                )}
+              </div>
+              {asking === d.n && (
+                <div className="mt-3 space-y-2">
+                  <Field label="What should change?" htmlFor={`dn-${d.n}`}><Textarea id={`dn-${d.n}`} rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+                  <Button size="sm" variant="primary" disabled={!note.trim()} onClick={() => void act(`${d.n}/request-changes`, { note: note.trim() }, 'Changes requested').then((ok) => ok && setAsking(null))}>Send to the editor</Button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {left && right && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2" aria-label="Compare drafts">
+          {[left, right].map((d) => (
+            <div key={d.n}>
+              <div className="mb-1 text-xs font-semibold">v{d.n}</div>
+              <video controls className="w-full rounded-xl border border-slate-800" src={`/api/edit/files/${d.fileName}`} />
+            </div>
+          ))}
+        </div>
+      )}
+      {pick.length === 1 && <p className="mt-3 text-xs text-slate-500">Tick one more draft to watch the two side by side.</p>}
     </Card>
   );
 }

@@ -4,7 +4,7 @@ import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
 import { approveBeat, beatCounts, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, suggestBeats, updateBeat } from '../services/beats';
 import {
-  captionFonts, captionsSchema, DEFAULT_LABEL, getCuts, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
+  approveVideoDraft, captionFonts, captionsSchema, DEFAULT_LABEL, requestVideoDraftChanges, submitVideoDraft, getCuts, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
 
 export const edit = Router();
@@ -74,8 +74,36 @@ edit.post(
   '/render',
   wrap(async (req, res) => {
     const b = renderBody.parse(req.body);
-    const job = await startRender({ orgId: req.user!.orgId, workspaceId: req.workspace!.id, videoId: b.videoId, steps: b.steps, label: b.label, captions: b.captions });
+    const job = await startRender({ orgId: req.user!.orgId, workspaceId: req.workspace!.id, videoId: b.videoId, steps: b.steps, label: b.label, captions: b.captions, createdBy: req.user!.name });
     res.status(202).json(job);
+  }),
+);
+
+// ---- numbered drafts (every render is kept as v1, v2, ...) -------------------------------------------------
+const draftNumber = (req: { params: Record<string, string> }) => z.coerce.number().int().min(1).parse(req.params.n);
+
+edit.post(
+  '/videos/:id/drafts/:n/submit',
+  wrap(async (req, res) => {
+    res.json(await submitVideoDraft(req.params.id, draftNumber(req)));
+  }),
+);
+
+/** Reviewing is the admin's job, as with beats. */
+edit.post(
+  '/videos/:id/drafts/:n/approve',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    res.json(await approveVideoDraft(req.params.id, draftNumber(req)));
+  }),
+);
+
+edit.post(
+  '/videos/:id/drafts/:n/request-changes',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    const { note } = z.object({ note: z.string().trim().min(1).max(2000) }).parse(req.body);
+    res.json(await requestVideoDraftChanges(req.params.id, draftNumber(req), note));
   }),
 );
 

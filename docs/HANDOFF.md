@@ -55,6 +55,8 @@ Written 2026-10-18. Single-user tool for Elle. Not hosted, not for sharing over 
 
 - **Timeline:** one time axis under the beats with rows Beats (coloured by status, click to review), Titles & Cards, Zoom, Looks (only when used), Captions, and Your cuts (detected). Effects are sorted into rows by name (`ZOOM_FX`, `LOOK_FX` in `Edit.tsx`; everything else is a title or card). Cuts come from ffmpeg scene detection (threshold 0.35, free) and are cached as `<id>.cuts.json` beside the video; the Captions row shows where speech runs once the video has been transcribed.
 
+- **Numbered drafts:** every render is kept as a draft (v1, v2, ...) in the video's record (`drafts`), with who rendered it, when, the settings used, and a plain-words list of what changed from the draft before (`services/drafts.ts`). Under "Drafts" on the Editing page: Watch, Compare (tick two to play side by side), Submit for review (anyone on the team), Approve or Request changes (admin only; the note shows on the draft). Statuses match beats: draft, in review, changes needed, approved. The edits list shows the latest draft and its status. Drafts made before this change do not exist; the first render after it becomes v1.
+
 ## Instagram carousel (separate from the dashboard)
 - Topic: why unused Higgsfield credits do not roll over, and Elle built her own studio on the API.
 - Slide 1 is Elle's own finished graphic. Slides 2 to 7 were made in Studio with the copy written inside a dark holographic panel. Cost about $1.26 on top of earlier tests ($0.12 per new image, $0.09 per text edit).
