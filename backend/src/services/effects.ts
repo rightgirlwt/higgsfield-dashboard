@@ -117,6 +117,12 @@ export async function buildPlan(steps: Step[]): Promise<string> {
 }
 
 // ---- uploaded videos ------------------------------------------------------------------------------------
+/** The effects and label chosen for a video, kept with it so both editors see the same edit. */
+export interface EditPlan {
+  steps: Step[];
+  label: Label;
+}
+
 export interface EditVideo {
   id: string;
   name: string;
@@ -124,6 +130,7 @@ export interface EditVideo {
   workspaceId: string | null;
   createdAt: string;
   kind: 'source' | 'result';
+  plan?: EditPlan;
 }
 
 const VIDEO_TYPES: Record<string, string> = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm' };
@@ -201,6 +208,19 @@ async function videoFile(id: string): Promise<{ file: string; record: EditVideo 
     }
   }
   throw notFound('Video not found');
+}
+
+export async function getVideo(id: string): Promise<EditVideo> {
+  return (await videoFile(id)).record;
+}
+
+export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema });
+
+export async function savePlan(id: string, plan: EditPlan): Promise<EditVideo> {
+  const { record } = await videoFile(id);
+  record.plan = plan;
+  await writeRecord(record);
+  return record;
 }
 
 // ---- previews -------------------------------------------------------------------------------------------

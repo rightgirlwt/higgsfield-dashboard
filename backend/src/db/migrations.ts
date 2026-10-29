@@ -289,6 +289,33 @@ CREATE INDEX projects_workspace_idx ON projects(workspace_id, updated_at DESC);
 CREATE INDEX media_workspace_idx ON media_assets(workspace_id, created_at DESC);
 `,
   },
+  {
+    version: 5,
+    name: 'video_beats',
+    // A video on the Editing page is split into beats; each has its own review status, notes and checklist of requested changes.
+    sql: `
+CREATE TABLE video_beats (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  video_id uuid NOT NULL,
+  position integer NOT NULL DEFAULT 0,
+  title text NOT NULL DEFAULT '',
+  start_sec double precision NOT NULL DEFAULT 0,
+  end_sec double precision NOT NULL DEFAULT 0,
+  you_say text NOT NULL DEFAULT '',
+  on_screen text NOT NULL DEFAULT '',
+  visual text NOT NULL DEFAULT '',
+  animation text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','changes_needed','approved')),
+  change_request text NOT NULL DEFAULT '',
+  adjustments jsonb NOT NULL DEFAULT '[]'::jsonb,
+  updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX video_beats_video_idx ON video_beats(video_id, position, start_sec);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

@@ -1,8 +1,8 @@
-import { Film, Play, Plus, Trash2, Upload } from 'lucide-react';
+import { Check, Film, Play, Plus, Send, Trash2, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useCan } from '../auth/context';
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Select, Skeleton } from '../components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Select, Skeleton, Textarea } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { useApi, useDocumentTitle } from '../lib/hooks';
 import { useToast } from '../state/Toast';
@@ -15,10 +15,18 @@ interface EffectList {
   engine: { ready: boolean; message: string };
   effects: Effect[];
 }
+interface ApiStep {
+  fx: string;
+  start: number;
+  end: number;
+  text?: string;
+  options: Record<string, string | number>;
+}
 interface Video {
   id: string;
   name: string;
   durationSec: number | null;
+  plan?: { steps: ApiStep[]; label: { enabled: boolean; text: string } };
 }
 interface Step {
   key: number;
@@ -39,36 +47,71 @@ interface WorkspaceList {
   workspaces: { id: string; name: string }[];
   current: string;
 }
+type BeatStatus = 'draft' | 'in_review' | 'changes_needed' | 'approved';
+interface Adjustment {
+  id: string;
+  text: string;
+  done: boolean;
+}
+interface Beat {
+  id: string;
+  title: string;
+  startSec: number;
+  endSec: number;
+  youSay: string;
+  onScreen: string;
+  visual: string;
+  animation: string;
+  status: BeatStatus;
+  changeRequest: string;
+  adjustments: Adjustment[];
+  updatedAt: string;
+}
 
 const DEFAULT_LABEL = 'DRAMATIZATION | AI-GENERATED VIDEO';
 const VIDEO_ACCEPT = 'video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm';
 const num = (v: string, fallback = 0) => (Number.isFinite(Number(v)) && v !== '' ? Number(v) : fallback);
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const clock = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+
+const STATUS: Record<BeatStatus, { label: string; tone: 'slate' | 'cyan' | 'amber' | 'emerald' }> = {
+  draft: { label: 'DRAFT', tone: 'slate' },
+  in_review: { label: 'IN REVIEW', tone: 'cyan' },
+  changes_needed: { label: 'CHANGES NEEDED', tone: 'amber' },
+  approved: { label: 'APPROVED', tone: 'emerald' },
+};
 
 /** What the engine reads: text and colour are sent as options only when filled in. */
-const toApiStep = (s: Step) => ({ fx: s.fx, start: s.start, end: s.end, ...(s.text.trim() ? { text: s.text.trim() } : {}), options: s.color.trim() ? { color: s.color.trim() } : {} });
+const toApiStep = (s: Step): ApiStep => ({ fx: s.fx, start: s.start, end: s.end, ...(s.text.trim() ? { text: s.text.trim() } : {}), options: s.color.trim() ? { color: s.color.trim() } : {} });
 
 export default function Edit() {
   useDocumentTitle('Editing');
   const toast = useToast();
   const canWrite = useCan('user');
+  const isReviewer = useCan('admin');
   const effects = useApi<EffectList>('/edit/effects');
   const videos = useApi<Video[]>('/edit/videos');
   const workspaces = useApi<WorkspaceList>('/workspaces');
   const [videoId, setVideoId] = useState('');
   const [search, setSearch] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
-  const [time, setTime] = useState(1);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [labelOn, setLabelOn] = useState(false);
   const [labelText, setLabelText] = useState(DEFAULT_LABEL);
   const [job, setJob] = useState<Job | null>(null);
+  const [beatId, setBeatId] = useState('');
   const nextKey = useRef(1);
   const fileInput = useRef<HTMLInputElement>(null);
+  const loadedFor = useRef('');
+  const savedPlan = useRef('');
 
   const video = videos.data?.find((v) => v.id === videoId) ?? null;
   const duration = video?.durationSec ?? 60;
+  const beats = useApi<Beat[]>(videoId ? `/edit/videos/${videoId}/beats` : null);
+  const beatList = beats.data ?? [];
+  const beat = beatList.find((b) => b.id === beatId) ?? beatList[0] ?? null;
   const workspaceName = workspaces.data?.workspaces.find((w) => w.id === workspaces.data?.current)?.name ?? '';
   const isLegal = /greene legal/i.test(workspaceName);
 
@@ -76,6 +119,31 @@ export default function Edit() {
     if (!videoId && videos.data?.length) setVideoId(videos.data[0].id);
   }, [videos.data, videoId]);
   useEffect(() => () => void (previewUrl && URL.revokeObjectURL(previewUrl)), [previewUrl]);
+
+  // Load the saved edit when a video is chosen, so Elle and Ruth see the same effects and label.
+  useEffect(() => {
+    if (!video || loadedFor.current === video.id) return;
+    loadedFor.current = video.id;
+    const p = video.plan;
+    setSteps((p?.steps ?? []).map((s) => ({ key: nextKey.current++, fx: s.fx, start: s.start, end: s.end, text: s.text ?? '', color: String(s.options?.color ?? '') })));
+    setLabelOn(p?.label.enabled ?? false);
+    setLabelText(p?.label.text ?? DEFAULT_LABEL);
+    savedPlan.current = JSON.stringify({ steps: p?.steps ?? [], label: p?.label ?? { enabled: false, text: DEFAULT_LABEL } });
+    setPreviewUrl(null);
+    setBeatId('');
+  }, [video]);
+
+  // ...and save it again a moment after it changes.
+  useEffect(() => {
+    if (!videoId || loadedFor.current !== videoId || !canWrite) return;
+    const body = { steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText } };
+    const json = JSON.stringify(body);
+    if (json === savedPlan.current) return;
+    const t = setTimeout(() => {
+      api.put(`/edit/videos/${videoId}/plan`, body).then(() => void (savedPlan.current = json)).catch((e) => toast.error(errorMessage(e)));
+    }, 800);
+    return () => clearTimeout(t);
+  }, [steps, labelOn, labelText, videoId, canWrite, toast]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -98,16 +166,18 @@ export default function Edit() {
     }
   }
 
+  /** An effect goes on the beat being reviewed; with no beats yet it starts at the preview time and lasts 3 seconds. */
   const addStep = (fx: string) => {
-    const start = Math.min(Math.round(time * 10) / 10, Math.max(0, duration - 0.5));
-    setSteps((p) => [...p, { key: nextKey.current++, fx, start, end: Math.min(Math.round((start + 3) * 10) / 10, duration), text: '', color: '' }]);
+    const start = beat ? beat.startSec : Math.min(1, Math.max(0, duration - 0.5));
+    const end = beat ? beat.endSec : Math.min(round1(start + 3), duration);
+    setSteps((p) => [...p, { key: nextKey.current++, fx, start, end, text: '', color: '' }]);
   };
   const patch = (key: number, p: Partial<Step>) => setSteps((all) => all.map((s) => (s.key === key ? { ...s, ...p } : s)));
 
-  async function preview() {
+  async function preview(at: number) {
     setPreviewing(true);
     try {
-      const blob = await api.postBlob('/edit/preview', { videoId, steps: steps.map(toApiStep), time, label: { enabled: labelOn, text: labelText } });
+      const blob = await api.postBlob('/edit/preview', { videoId, steps: steps.map(toApiStep), time: at, label: { enabled: labelOn, text: labelText } });
       setPreviewUrl(URL.createObjectURL(blob));
     } catch (e) {
       toast.error(errorMessage(e));
@@ -118,8 +188,7 @@ export default function Edit() {
 
   async function render() {
     try {
-      const j = await api.post<Job>('/edit/render', { videoId, steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText } });
-      setJob(j);
+      setJob(await api.post<Job>('/edit/render', { videoId, steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText } }));
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -135,6 +204,21 @@ export default function Edit() {
     return () => clearInterval(timer);
   }, [jobId]);
 
+  // ---- beats ----
+  async function act<T>(fn: () => Promise<T>, ok?: string): Promise<T | null> {
+    try {
+      const r = await fn();
+      beats.reload();
+      if (ok) toast.success(ok);
+      return r;
+    } catch (e) {
+      toast.error(errorMessage(e));
+      return null;
+    }
+  }
+  const addBeat = (b: { title: string; startSec: number; endSec: number }) =>
+    act(() => api.post<Beat>(`/edit/videos/${videoId}/beats`, b)).then((r) => r && setBeatId(r.id));
+
   const ready = effects.data?.engine.ready;
   const canRun = canWrite && !!videoId && (steps.length > 0 || labelOn) && steps.every((s) => s.end > s.start);
 
@@ -142,7 +226,7 @@ export default function Edit() {
     <div>
       <PageHeader eyebrow="Effects and label" title="Editing" />
       <p className="mb-5 max-w-3xl text-sm text-slate-400">
-        Add effects and the dramatization label to a video: orbiting reels, spotlight, glass widgets, headlines and 40 more. Previews and renders happen on this computer and cost nothing. They work best on videos where one person faces the camera: the effects follow the face, and long text can be cut at the edge on other footage.
+        Split a video into beats, add effects and the dramatization label, then review it beat by beat. Previews and renders happen on this computer and cost nothing. Effects work best on videos where one person faces the camera: they follow the face, and long text can be cut at the edge on other footage.
       </p>
 
       {effects.error ? (
@@ -152,121 +236,310 @@ export default function Edit() {
       ) : !ready ? (
         <EmptyState title="The effects engine is not set up" hint={effects.data.engine.message} />
       ) : (
-        <div className="grid gap-6 xl:grid-cols-[1.1fr_1fr]">
-          <div className="space-y-6">
-            <Card className="p-5">
-              <CardHeader eyebrow="1" title="Video" />
-              <div className="flex flex-wrap items-center gap-3">
-                <Select aria-label="Video" className="min-w-0 flex-1" value={videoId} onChange={(e) => setVideoId(e.target.value)} disabled={!videos.data?.length}>
-                  {!videos.data?.length && <option value="">No videos yet</option>}
-                  {videos.data?.map((v) => (
-                    <option key={v.id} value={v.id}>{v.name}{v.durationSec ? ` (${v.durationSec}s)` : ''}</option>
-                  ))}
-                </Select>
-                <input ref={fileInput} type="file" accept={VIDEO_ACCEPT} hidden onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} />
-                <Button loading={uploading} disabled={!canWrite} onClick={() => fileInput.current?.click()}>
-                  <Upload className="h-4 w-4" aria-hidden /> Add a video
-                </Button>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">MP4, MOV or WebM, up to 500 MB. Videos are kept in the workspace you are in{workspaceName ? ` (${workspaceName})` : ''}.</p>
-            </Card>
-
-            <Card className="p-5">
-              <CardHeader eyebrow="2" title="Pick effects" />
-              <Input aria-label="Search effects" placeholder="Search, for example spotlight or headline" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <ul className="mt-4 grid max-h-[28rem] gap-2 overflow-auto sm:grid-cols-2">
-                {shown.map((e) => (
-                  <li key={e.name} className="flex items-start justify-between gap-2 rounded-xl border border-slate-800 p-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold">{e.name}</div>
-                      <p className="text-xs text-slate-400">{e.description}</p>
-                    </div>
-                    <Button size="sm" variant="ghost" aria-label={`Add ${e.name}`} disabled={!videoId} onClick={() => addStep(e.name)}>
-                      <Plus className="h-4 w-4" aria-hidden />
-                    </Button>
-                  </li>
+        <div className="space-y-6">
+          <Card className="p-5">
+            <CardHeader eyebrow="1" title="Video" />
+            <div className="flex flex-wrap items-center gap-3">
+              <Select aria-label="Video" className="min-w-0 flex-1" value={videoId} onChange={(e) => setVideoId(e.target.value)} disabled={!videos.data?.length}>
+                {!videos.data?.length && <option value="">No videos yet</option>}
+                {videos.data?.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}{v.durationSec ? ` (${v.durationSec}s)` : ''}</option>
                 ))}
-                {shown.length === 0 && <li className="p-3 text-sm text-slate-400">No effect matches that.</li>}
-              </ul>
-            </Card>
-          </div>
+              </Select>
+              <input ref={fileInput} type="file" accept={VIDEO_ACCEPT} hidden onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} />
+              <Button loading={uploading} disabled={!canWrite} onClick={() => fileInput.current?.click()}>
+                <Upload className="h-4 w-4" aria-hidden /> Add a video
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">MP4, MOV or WebM, up to 500 MB. Videos are kept in the workspace you are in{workspaceName ? ` (${workspaceName})` : ''}.</p>
+          </Card>
 
-          <div className="space-y-6">
-            <Card className="p-5">
-              <CardHeader eyebrow="3" title="Your effects" />
-              {steps.length === 0 ? (
-                <p className="text-sm text-slate-400">Add an effect from the list, or skip to step 5 to add only the label. An effect starts at the time shown in the preview slider below and lasts 3 seconds, which you can change.</p>
-              ) : (
-                <ul className="space-y-3">
-                  {steps.map((s) => (
-                    <li key={s.key} className="rounded-xl border border-slate-800 p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <Badge tone="cyan">{s.fx}</Badge>
-                        <Button size="sm" variant="ghost" aria-label={`Remove ${s.fx}`} onClick={() => setSteps((p) => p.filter((x) => x.key !== s.key))}>
-                          <Trash2 className="h-4 w-4 text-rose-300" aria-hidden />
-                        </Button>
+          {videoId && <BeatStrip beats={beatList} duration={duration} selectedId={beat?.id ?? ''} onSelect={setBeatId} onAdd={addBeat} canWrite={canWrite} />}
+
+          <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
+            <div className="space-y-6">
+              <Card className="p-5">
+                <CardHeader eyebrow="Effects library" title="Pick effects" />
+                <Input aria-label="Search effects" placeholder="Search, for example spotlight or headline" value={search} onChange={(e) => setSearch(e.target.value)} />
+                {beat && <p className="mt-2 text-xs text-slate-500">New effects go on the selected beat: {beat.title || 'untitled'} ({clock(beat.startSec)} to {clock(beat.endSec)}).</p>}
+                <ul className="mt-4 grid max-h-[26rem] gap-2 overflow-auto sm:grid-cols-2">
+                  {shown.map((e) => (
+                    <li key={e.name} className="flex items-start justify-between gap-2 rounded-xl border border-slate-800 p-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">{e.name}</div>
+                        <p className="text-xs text-slate-400">{e.description}</p>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        <Field label="Start (s)" htmlFor={`s-${s.key}`}><Input id={`s-${s.key}`} type="number" min={0} step={0.1} value={s.start} onChange={(e) => patch(s.key, { start: num(e.target.value) })} /></Field>
-                        <Field label="End (s)" htmlFor={`e-${s.key}`}><Input id={`e-${s.key}`} type="number" min={0} step={0.1} value={s.end} onChange={(e) => patch(s.key, { end: num(e.target.value) })} /></Field>
-                        <Field label="Text" htmlFor={`t-${s.key}`}><Input id={`t-${s.key}`} value={s.text} placeholder="optional" onChange={(e) => patch(s.key, { text: e.target.value })} /></Field>
-                        <Field label="Colour" htmlFor={`c-${s.key}`}><Input id={`c-${s.key}`} value={s.color} placeholder="#99577a" onChange={(e) => patch(s.key, { color: e.target.value })} /></Field>
-                      </div>
-                      {s.end <= s.start && <p className="mt-1 text-xs text-rose-300">The end must be after the start.</p>}
+                      <Button size="sm" variant="ghost" aria-label={`Add ${e.name}`} disabled={!videoId || !canWrite} onClick={() => addStep(e.name)}>
+                        <Plus className="h-4 w-4" aria-hidden />
+                      </Button>
                     </li>
                   ))}
+                  {shown.length === 0 && <li className="p-3 text-sm text-slate-400">No effect matches that.</li>}
                 </ul>
-              )}
-            </Card>
+              </Card>
 
-            <Card className="p-5">
-              <CardHeader eyebrow="4" title="Preview a frame" />
-              <Field label={`Time in the video: ${time.toFixed(1)} s`} htmlFor="time">
-                <input id="time" type="range" min={0} max={duration} step={0.1} value={time} onChange={(e) => setTime(Number(e.target.value))} className="w-full" />
-              </Field>
-              <Button className="mt-3" loading={previewing} disabled={!canRun} onClick={() => void preview()}>
-                <Film className="h-4 w-4" aria-hidden /> Preview this frame
-              </Button>
-              <span className="ml-3 text-xs text-slate-500">Takes about 20 to 30 seconds.</span>
-              {previewUrl && <img src={previewUrl} alt="Preview of the chosen frame with the effects and label applied" className="mt-4 max-h-[32rem] rounded-xl border border-slate-800" />}
-            </Card>
+              <Card className="p-5">
+                <CardHeader eyebrow="Your effects" title="Applied to this video" />
+                {steps.length === 0 ? (
+                  <p className="text-sm text-slate-400">Add an effect from the library, or turn on the label below to add only the label.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {steps.map((s) => (
+                      <li key={s.key} className="rounded-xl border border-slate-800 p-3">
+                        <div className="mb-2 flex items-center justify-between">
+                          <Badge tone="cyan">{s.fx}</Badge>
+                          <Button size="sm" variant="ghost" aria-label={`Remove ${s.fx}`} disabled={!canWrite} onClick={() => setSteps((p) => p.filter((x) => x.key !== s.key))}>
+                            <Trash2 className="h-4 w-4 text-rose-300" aria-hidden />
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          <Field label="Start (s)" htmlFor={`s-${s.key}`}><Input id={`s-${s.key}`} type="number" min={0} step={0.1} value={s.start} onChange={(e) => patch(s.key, { start: num(e.target.value) })} /></Field>
+                          <Field label="End (s)" htmlFor={`e-${s.key}`}><Input id={`e-${s.key}`} type="number" min={0} step={0.1} value={s.end} onChange={(e) => patch(s.key, { end: num(e.target.value) })} /></Field>
+                          <Field label="Text" htmlFor={`t-${s.key}`}><Input id={`t-${s.key}`} value={s.text} placeholder="optional" onChange={(e) => patch(s.key, { text: e.target.value })} /></Field>
+                          <Field label="Colour" htmlFor={`c-${s.key}`}><Input id={`c-${s.key}`} value={s.color} placeholder="#99577a" onChange={(e) => patch(s.key, { color: e.target.value })} /></Field>
+                        </div>
+                        {s.end <= s.start && <p className="mt-1 text-xs text-rose-300">The end must be after the start.</p>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
 
-            <Card className="p-5">
-              <CardHeader eyebrow="5" title="Label and render" />
-              <label className="flex items-start gap-3 text-sm">
-                <input type="checkbox" className="mt-1" checked={labelOn} onChange={(e) => setLabelOn(e.target.checked)} />
-                <span>
-                  Add the dramatization label for the whole video
-                  <span className="block text-xs text-slate-500">
-                    Off unless you turn it on. It can be used on its own, with no effects. {isLegal ? 'This is Greene Legal Group: AI-generated or dramatized video needs a visible label before it is posted.' : 'For example DRAMATIZATION on AI-generated video.'}
+              <Card className="p-5">
+                <CardHeader eyebrow="Label and render" title="Finish the draft" />
+                <label className="flex items-start gap-3 text-sm">
+                  <input type="checkbox" className="mt-1" checked={labelOn} disabled={!canWrite} onChange={(e) => setLabelOn(e.target.checked)} />
+                  <span>
+                    Add the dramatization label for the whole video
+                    <span className="block text-xs text-slate-500">
+                      Off unless you turn it on. It can be used on its own, with no effects. {isLegal ? 'This is Greene Legal Group: AI-generated or dramatized video needs a visible label before it is posted.' : 'For example DRAMATIZATION on AI-generated video.'}
+                    </span>
                   </span>
-                </span>
-              </label>
-              {labelOn && (
-                <div className="mt-3">
-                  <Field label="Label text" htmlFor="label"><Input id="label" maxLength={80} value={labelText} onChange={(e) => setLabelText(e.target.value)} /></Field>
-                </div>
-              )}
-              {isLegal && !labelOn && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-200">No label is on. If this video is AI-generated or a dramatization, turn the label on or add it yourself before posting.</p>}
-              <Button className="mt-4" variant="primary" disabled={!canRun || job?.status === 'running'} onClick={() => void render()}>
-                <Play className="h-4 w-4" aria-hidden /> Render video
-              </Button>
-              {job && (
-                <div className="mt-4 text-sm" role="status">
-                  {job.status === 'running' && <p className="text-slate-300">{job.message}</p>}
-                  {job.status === 'failed' && <p className="text-rose-300">The render failed: {job.message}</p>}
-                  {job.status === 'done' && job.fileName && (
-                    <div className="space-y-2">
-                      <p className="text-emerald-300">Done. It is saved in the <Link className="underline" to="/media">Media</Link> library. Watch it before you post.</p>
-                      <video controls className="max-h-[32rem] rounded-xl border border-slate-800" src={`/api/edit/files/${job.fileName}`} />
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
+                </label>
+                {labelOn && (
+                  <div className="mt-3">
+                    <Field label="Label text" htmlFor="label"><Input id="label" maxLength={80} value={labelText} disabled={!canWrite} onChange={(e) => setLabelText(e.target.value)} /></Field>
+                  </div>
+                )}
+                {isLegal && !labelOn && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-200">No label is on. If this video is AI-generated or a dramatization, turn the label on or add it yourself before posting.</p>}
+                <Button className="mt-4" variant="primary" disabled={!canRun || job?.status === 'running'} onClick={() => void render()}>
+                  <Play className="h-4 w-4" aria-hidden /> Render video
+                </Button>
+                {job && (
+                  <div className="mt-4 text-sm" role="status">
+                    {job.status === 'running' && <p className="text-slate-300">{job.message}</p>}
+                    {job.status === 'failed' && <p className="text-rose-300">The render failed: {job.message}</p>}
+                    {job.status === 'done' && job.fileName && (
+                      <div className="space-y-2">
+                        <p className="text-emerald-300">Done. It is saved in the <Link className="underline" to="/media">Media</Link> library. Watch it before you post.</p>
+                        <video controls className="max-h-[32rem] rounded-xl border border-slate-800" src={`/api/edit/files/${job.fileName}`} />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            <ReviewPanel
+              beat={beat}
+              index={beat ? beatList.findIndex((b) => b.id === beat.id) : -1}
+              total={beatList.length}
+              beats={beatList}
+              onSelect={setBeatId}
+              steps={steps}
+              labelOn={labelOn}
+              previewUrl={previewUrl}
+              previewing={previewing}
+              onPreview={(at) => void preview(at)}
+              canRun={canRun}
+              canWrite={canWrite}
+              isReviewer={isReviewer}
+              act={act}
+            />
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** The video as numbered beats, each as wide as it lasts. */
+function BeatStrip({ beats, duration, selectedId, onSelect, onAdd, canWrite }: {
+  beats: Beat[]; duration: number; selectedId: string; onSelect: (id: string) => void; onAdd: (b: { title: string; startSec: number; endSec: number }) => void; canWrite: boolean;
+}) {
+  const lastEnd = beats.reduce((m, b) => Math.max(m, b.endSec), 0);
+  const [title, setTitle] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const s = start === '' ? lastEnd : num(start);
+  const e = end === '' ? Math.min(round1(s + 5), duration) : num(end);
+  return (
+    <Card className="p-5">
+      <CardHeader eyebrow="Beats" title="Structure" />
+      {beats.length === 0 ? (
+        <p className="text-sm text-slate-400">No beats yet. A beat is one part of the video, such as the hook or a tip. Add the first one below.</p>
+      ) : (
+        <div className="flex gap-1 overflow-x-auto pb-1" role="tablist" aria-label="Beats">
+          {beats.map((b, i) => (
+            <button
+              key={b.id}
+              role="tab"
+              aria-selected={b.id === selectedId}
+              onClick={() => onSelect(b.id)}
+              style={{ flexGrow: Math.max(b.endSec - b.startSec, 0.5), flexBasis: 0, minWidth: '6rem' }}
+              className={`rounded-xl border px-2 py-2 text-left text-xs transition ${b.id === selectedId ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-800 hover:border-slate-700'}`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="font-semibold">{i + 1}</span>
+                <span className={`h-2 w-2 rounded-full ${b.status === 'approved' ? 'bg-emerald-400' : b.status === 'changes_needed' ? 'bg-amber-400' : b.status === 'in_review' ? 'bg-cyan-400' : 'bg-slate-500'}`} aria-label={STATUS[b.status].label} />
+              </div>
+              <div className="truncate">{b.title || 'Untitled'}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      {canWrite && (
+        <div className="mt-4 grid grid-cols-2 items-end gap-2 sm:grid-cols-[2fr_1fr_1fr_auto]">
+          <Field label="New beat" htmlFor="nb-title"><Input id="nb-title" value={title} placeholder="Hook" onChange={(ev) => setTitle(ev.target.value)} /></Field>
+          <Field label="Start (s)" htmlFor="nb-start"><Input id="nb-start" type="number" min={0} step={0.1} value={start} placeholder={String(round1(lastEnd))} onChange={(ev) => setStart(ev.target.value)} /></Field>
+          <Field label="End (s)" htmlFor="nb-end"><Input id="nb-end" type="number" min={0} step={0.1} value={end} placeholder={String(round1(Math.min(s + 5, duration)))} onChange={(ev) => setEnd(ev.target.value)} /></Field>
+          <Button
+            disabled={e <= s}
+            onClick={() => {
+              onAdd({ title: title.trim(), startSec: s, endSec: e });
+              setTitle('');
+              setStart('');
+              setEnd('');
+            }}
+          >
+            <Plus className="h-4 w-4" aria-hidden /> Add beat
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ReviewPanel({ beat, index, total, beats, onSelect, steps, labelOn, previewUrl, previewing, onPreview, canRun, canWrite, isReviewer, act }: {
+  beat: Beat | null; index: number; total: number; beats: Beat[]; onSelect: (id: string) => void; steps: Step[]; labelOn: boolean; previewUrl: string | null; previewing: boolean;
+  onPreview: (at: number) => void; canRun: boolean; canWrite: boolean; isReviewer: boolean; act: <T>(fn: () => Promise<T>, ok?: string) => Promise<T | null>;
+}) {
+  const [request, setRequest] = useState('');
+  useEffect(() => setRequest(''), [beat?.id]);
+
+  if (!beat) {
+    return (
+      <Card className="h-fit p-5">
+        <CardHeader eyebrow="Review beat by beat" title="Nothing to review yet" />
+        <p className="text-sm text-slate-400">Add a beat above to start. Each beat gets its own notes, status and change requests.</p>
+      </Card>
+    );
+  }
+  const st = STATUS[beat.status];
+  const changed = steps.filter((s) => s.start < beat.endSec && s.end > beat.startSec).map((s) => `Applied "${s.fx}"${s.text ? ` with the text "${s.text}"` : ''}`);
+  if (labelOn) changed.push('Added the dramatization label');
+  const save = (patch: Partial<Pick<Beat, 'title' | 'youSay' | 'onScreen' | 'visual' | 'animation'>>) => act(() => api.patch<Beat>(`/edit/beats/${beat.id}`, patch));
+  const text = (key: 'youSay' | 'onScreen' | 'visual' | 'animation', label: string, rows = 2) => (
+    <Field label={label} htmlFor={`f-${key}-${beat.id}`}>
+      <Textarea
+        id={`f-${key}-${beat.id}`}
+        key={`${beat.id}-${key}-${beat.updatedAt}`}
+        rows={rows}
+        defaultValue={beat[key]}
+        disabled={!canWrite}
+        onBlur={(e) => e.target.value !== beat[key] && void save({ [key]: e.target.value })}
+      />
+    </Field>
+  );
+  const mid = round1((beat.startSec + beat.endSec) / 2);
+
+  return (
+    <Card className="h-fit p-5">
+      <CardHeader eyebrow="Review beat by beat" title={`${index + 1}. ${beat.title || 'Untitled'}`} />
+      <div className="mb-4 flex gap-1 overflow-x-auto pb-1" role="tablist" aria-label="Beats to review">
+        {beats.map((b, i) => (
+          <button key={b.id} role="tab" aria-selected={b.id === beat.id} onClick={() => onSelect(b.id)} className={`whitespace-nowrap rounded-full border px-3 py-1 text-xs ${b.id === beat.id ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-800 text-slate-400'}`}>
+            {i + 1}. {b.title || 'Untitled'}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-5 md:grid-cols-[11rem_1fr]">
+        <div>
+          <div className="aspect-[9/16] w-full overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+            {previewUrl ? <img src={previewUrl} alt="Preview of this beat with the effects applied" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center p-3 text-center text-xs text-slate-500">No preview yet</div>}
+          </div>
+          <Button className="mt-2 w-full" size="sm" loading={previewing} disabled={!canRun} onClick={() => onPreview(mid)}>
+            <Film className="h-4 w-4" aria-hidden /> Preview this beat
+          </Button>
+          <p className="mt-1 text-[11px] text-slate-500">Takes 20 to 30 seconds with effects.</p>
+        </div>
+
+        <div className="min-w-0 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs text-slate-500">Beat {index + 1} of {total} · {clock(beat.startSec)} to {clock(beat.endSec)}</p>
+            <div className="flex items-center gap-2 text-xs">Status <Badge tone={st.tone}>{st.label}</Badge></div>
+          </div>
+          <Field label="Beat title" htmlFor={`title-${beat.id}`}>
+            <Input id={`title-${beat.id}`} key={`${beat.id}-t-${beat.updatedAt}`} defaultValue={beat.title} disabled={!canWrite} onBlur={(e) => e.target.value !== beat.title && void save({ title: e.target.value })} />
+          </Field>
+          {text('youSay', 'You say')}
+          {text('onScreen', 'On-screen text')}
+          {text('visual', 'Visual')}
+          {text('animation', 'Animation')}
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-5 md:grid-cols-2">
+        <section aria-label="What is changed">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">What's changed</h3>
+          {changed.length === 0 ? <p className="text-sm text-slate-500">Nothing applied to this beat yet.</p> : <ul className="list-disc space-y-1 pl-5 text-sm">{changed.map((c) => <li key={c}>{c}</li>)}</ul>}
+        </section>
+        <section aria-label="What needs adjustment">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">What needs adjustment</h3>
+          {beat.adjustments.length === 0 ? (
+            <p className="text-sm text-slate-500">Nothing requested.</p>
+          ) : (
+            <ul className="space-y-1.5 text-sm">
+              {beat.adjustments.map((a) => (
+                <li key={a.id}>
+                  <label className="flex items-start gap-2">
+                    <input type="checkbox" className="mt-1" checked={a.done} disabled={!canWrite} onChange={(e) => void act(() => api.patch(`/edit/beats/${beat.id}/adjustments/${a.id}`, { done: e.target.checked }))} />
+                    <span className={a.done ? 'text-slate-500 line-through' : ''}>{a.text}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      <div className="mt-5 border-t border-slate-800 pt-4">
+        {isReviewer ? (
+          <>
+            <Field label="Change request (optional)" htmlFor="change-request">
+              <Textarea id="change-request" rows={3} value={request} placeholder="e.g. Hold the before/after cards longer, or make the header say ... (one change per line)" onChange={(e) => setRequest(e.target.value)} />
+            </Field>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant="primary" disabled={beat.status === 'approved'} onClick={() => void act(() => api.post(`/edit/beats/${beat.id}/approve`), 'Beat approved.')}>
+                <Check className="h-4 w-4" aria-hidden /> {beat.status === 'approved' ? 'Approved' : 'Approve'}
+              </Button>
+              <Button disabled={!request.trim()} onClick={() => void act(() => api.post(`/edit/beats/${beat.id}/request-changes`, { request }), 'Changes requested.').then((r) => r && setRequest(''))}>
+                Request changes
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {beat.status === 'changes_needed' && beat.changeRequest && (
+              <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-sm text-amber-100">Requested: {beat.changeRequest}</p>
+            )}
+            <Button variant="primary" disabled={!canWrite || beat.status === 'in_review' || beat.status === 'approved'} onClick={() => void act(() => api.post(`/edit/beats/${beat.id}/submit`), 'Submitted for review.')}>
+              <Send className="h-4 w-4" aria-hidden /> {beat.status === 'in_review' ? 'Waiting for review' : beat.status === 'approved' ? 'Approved' : 'Submit for review'}
+            </Button>
+          </>
+        )}
+      </div>
+    </Card>
   );
 }
