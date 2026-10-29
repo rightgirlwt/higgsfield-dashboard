@@ -40,6 +40,8 @@ export const config = {
   effectsDir: env.EFFECTS_DIR ?? path.join(os.homedir(), '.claude', 'skills', 'effects'),
   /** Videos uploaded for editing, and the finished edits. */
   editDir: env.EDIT_DIR ?? './.data/edit',
+  /** Fonts the team adds for captions (.ttf or .otf). Kept in the project so everyone who pulls has them. */
+  fontsDir: env.FONTS_DIR ?? path.resolve(process.cwd(), '..', 'fonts'),
 
   /** `dev` = built-in seeded users (never allowed in production). `clerk` = verify Clerk session JWTs. */
   authProvider: (env.AUTH_PROVIDER ?? (isProd ? 'clerk' : 'dev')) as 'dev' | 'clerk',

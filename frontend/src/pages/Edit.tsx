@@ -2,7 +2,7 @@ import { ArrowLeft, Check, Film, Play, Plus, Send, Sparkles, Trash2, Upload } fr
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useCan } from '../auth/context';
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Skeleton, Textarea } from '../components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Select, Skeleton, Textarea } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
@@ -38,7 +38,7 @@ interface Video {
   createdAt: string;
   beats: BeatCounts;
   durationSec: number | null;
-  plan?: { steps: ApiStep[]; label: { enabled: boolean; text: string } };
+  plan?: { steps: ApiStep[]; label: { enabled: boolean; text: string }; captions?: { enabled: boolean; wordsPerLine: number; style?: CapStyle } };
 }
 interface Step {
   key: number;
@@ -80,7 +80,25 @@ interface Beat {
   updatedAt: string;
 }
 
-const DEFAULT_LABEL = 'DRAMATIZATION | AI-GENERATED VIDEO';
+interface CapStyle {
+  textColor: string;
+  highlightColor: string;
+  outlineColor: string;
+  italic: 'off' | 'all' | 'spoken';
+  emphasize: boolean;
+  size: 'small' | 'medium' | 'large';
+  position: 'top' | 'middle' | 'bottom';
+  caps: boolean;
+  font: string;
+  bold: boolean;
+}
+/** Each workspace starts from its own brand look; the team can change any of it per video. */
+const BASE_CAPTIONS: CapStyle = { textColor: '#ffffff', highlightColor: '#ebac65', outlineColor: '#99577a', italic: 'off', emphasize: false, size: 'medium', position: 'bottom', caps: true, font: 'Archivo Black', bold: false };
+// cream, gold, mauve, in the Right Girl Media brand font (Trirong only comes in a light weight here, so it is made bolder)
+const RGM_CAPTIONS: CapStyle = { ...BASE_CAPTIONS, textColor: '#fdf8f3', highlightColor: '#ebac65', outlineColor: '#99577a', font: 'Trirong Medium', bold: true };
+const GLG_CAPTIONS: CapStyle = { ...BASE_CAPTIONS, textColor: '#ffffff', highlightColor: '#c8102e', outlineColor: '#0b1f4b' }; // white, red, navy
+
+const DEFAULT_LABEL ='DRAMATIZATION | AI-GENERATED VIDEO';
 const VIDEO_ACCEPT = 'video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm';
 const num = (v: string, fallback = 0) => (Number.isFinite(Number(v)) && v !== '' ? Number(v) : fallback);
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -104,6 +122,7 @@ export default function Edit() {
   const effects = useApi<EffectList>('/edit/effects');
   const videos = useApi<Video[]>('/edit/videos');
   const workspaces = useApi<WorkspaceList>('/workspaces');
+  const fonts = useApi<{ family: string; source: 'team' | 'skill' }[]>('/edit/fonts');
   const [videoId, setVideoId] = useState('');
   const [search, setSearch] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
@@ -112,6 +131,9 @@ export default function Edit() {
   const [uploading, setUploading] = useState(false);
   const [labelOn, setLabelOn] = useState(false);
   const [labelText, setLabelText] = useState(DEFAULT_LABEL);
+  const [capsOn, setCapsOn] = useState(false);
+  const [perLine, setPerLine] = useState(3);
+  const [capStyle, setCapStyle] = useState<CapStyle>(RGM_CAPTIONS);
   const [job, setJob] = useState<Job | null>(null);
   const [beatId, setBeatId] = useState('');
   const nextKey = useRef(1);
@@ -126,6 +148,8 @@ export default function Edit() {
   const beat = beatList.find((b) => b.id === beatId) ?? beatList[0] ?? null;
   const workspaceName = workspaces.data?.workspaces.find((w) => w.id === workspaces.data?.current)?.name ?? '';
   const isLegal = /greene legal/i.test(workspaceName);
+  const workspaceCaptions = isLegal ? GLG_CAPTIONS : RGM_CAPTIONS;
+  const captionsBody = { enabled: capsOn, wordsPerLine: perLine, style: capStyle };
 
   useEffect(() => () => void (previewUrl && URL.revokeObjectURL(previewUrl)), [previewUrl]);
 
@@ -137,7 +161,13 @@ export default function Edit() {
     setSteps((p?.steps ?? []).map((s) => ({ key: nextKey.current++, fx: s.fx, start: s.start, end: s.end, text: s.text ?? '', color: String(s.options?.color ?? '') })));
     setLabelOn(p?.label.enabled ?? false);
     setLabelText(p?.label.text ?? DEFAULT_LABEL);
-    savedPlan.current = JSON.stringify({ steps: p?.steps ?? [], label: p?.label ?? { enabled: false, text: DEFAULT_LABEL } });
+    setCapsOn(p?.captions?.enabled ?? false);
+    setPerLine(p?.captions?.wordsPerLine ?? 3);
+    const style = p?.captions?.style ?? workspaceCaptions;
+    setCapStyle(style);
+    savedPlan.current = JSON.stringify({
+      steps: p?.steps ?? [], label: p?.label ?? { enabled: false, text: DEFAULT_LABEL }, captions: { enabled: p?.captions?.enabled ?? false, wordsPerLine: p?.captions?.wordsPerLine ?? 3, style },
+    });
     setPreviewUrl(null);
     setBeatId('');
   }, [video]);
@@ -145,14 +175,14 @@ export default function Edit() {
   // ...and save it again a moment after it changes.
   useEffect(() => {
     if (!videoId || loadedFor.current !== videoId || !canWrite) return;
-    const body = { steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText } };
+    const body = { steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText }, captions: captionsBody };
     const json = JSON.stringify(body);
     if (json === savedPlan.current) return;
     const t = setTimeout(() => {
       api.put(`/edit/videos/${videoId}/plan`, body).then(() => void (savedPlan.current = json)).catch((e) => toast.error(errorMessage(e)));
     }, 800);
     return () => clearTimeout(t);
-  }, [steps, labelOn, labelText, videoId, canWrite, toast]);
+  }, [steps, labelOn, labelText, capsOn, perLine, capStyle, videoId, canWrite, toast]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -186,7 +216,7 @@ export default function Edit() {
   async function preview(at: number) {
     setPreviewing(true);
     try {
-      const blob = await api.postBlob('/edit/preview', { videoId, steps: steps.map(toApiStep), time: at, label: { enabled: labelOn, text: labelText } });
+      const blob = await api.postBlob('/edit/preview', { videoId, steps: steps.map(toApiStep), time: at, label: { enabled: labelOn, text: labelText }, captions: captionsBody });
       setPreviewUrl(URL.createObjectURL(blob));
     } catch (e) {
       toast.error(errorMessage(e));
@@ -197,7 +227,7 @@ export default function Edit() {
 
   async function render() {
     try {
-      setJob(await api.post<Job>('/edit/render', { videoId, steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText } }));
+      setJob(await api.post<Job>('/edit/render', { videoId, steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText }, captions: captionsBody }));
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -229,7 +259,7 @@ export default function Edit() {
     act(() => api.post<Beat>(`/edit/videos/${videoId}/beats`, b)).then((r) => r && setBeatId(r.id));
 
   const ready = effects.data?.engine.ready;
-  const canRun = canWrite && !!videoId && (steps.length > 0 || labelOn) && steps.every((s) => s.end > s.start);
+  const canRun = canWrite && !!videoId && (steps.length > 0 || labelOn || capsOn) && steps.every((s) => s.end > s.start);
 
   return (
     <div>
@@ -325,7 +355,68 @@ export default function Edit() {
               </Card>
 
               <Card className="p-5">
-                <CardHeader eyebrow="Label and render" title="Finish the draft" />
+                <CardHeader eyebrow="Captions, label and render" title="Finish the draft" />
+                <label className="mb-4 flex items-start gap-3 text-sm">
+                  <input type="checkbox" className="mt-1" checked={capsOn} disabled={!canWrite} onChange={(e) => setCapsOn(e.target.checked)} />
+                  <span>
+                    Add captions
+                    <span className="block text-xs text-slate-500">
+                      The words appear as they are spoken, a few at a time, with the word being said in yellow. The first time, the video is transcribed on this computer (free, about a minute).
+                    </span>
+                  </span>
+                </label>
+                {capsOn && (
+                  <div className="-mt-1 mb-4 space-y-3 rounded-xl border border-slate-800 p-3 text-xs text-slate-400">
+                    <div className="grid grid-cols-3 gap-3">
+                      {([['textColor', 'Text'], ['highlightColor', 'Spoken word'], ['outlineColor', 'Outline']] as const).map(([key, label]) => (
+                        <label key={key} className="flex items-center gap-2">
+                          <input type="color" aria-label={`${label} colour`} className="h-8 w-8 shrink-0 cursor-pointer rounded border border-slate-700 bg-transparent" value={capStyle[key]} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, [key]: e.target.value })} />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <Field label="Words at once" htmlFor="cap-n">
+                        <Select id="cap-n" value={perLine} disabled={!canWrite} onChange={(e) => setPerLine(Number(e.target.value))}>
+                          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+                        </Select>
+                      </Field>
+                      <Field label="Italic" htmlFor="cap-i">
+                        <Select id="cap-i" value={capStyle.italic} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, italic: e.target.value as CapStyle['italic'] })}>
+                          <option value="off">Off</option>
+                          <option value="spoken">Spoken word only</option>
+                          <option value="all">Whole caption</option>
+                        </Select>
+                      </Field>
+                      <Field label="Size" htmlFor="cap-s">
+                        <Select id="cap-s" value={capStyle.size} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, size: e.target.value as CapStyle['size'] })}>
+                          <option value="small">Small</option>
+                          <option value="medium">Medium</option>
+                          <option value="large">Large</option>
+                        </Select>
+                      </Field>
+                      <Field label="Position" htmlFor="cap-p">
+                        <Select id="cap-p" value={capStyle.position} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, position: e.target.value as CapStyle['position'] })}>
+                          <option value="top">Top</option>
+                          <option value="middle">Middle</option>
+                          <option value="bottom">Bottom</option>
+                        </Select>
+                      </Field>
+                    </div>
+                    <Field label="Font" htmlFor="cap-f">
+                      <Select id="cap-f" value={capStyle.font} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, font: e.target.value })}>
+                        {!fonts.data?.some((f) => f.family === capStyle.font) && <option value={capStyle.font}>{capStyle.font} (not installed, a default will be used)</option>}
+                        {fonts.data?.map((f) => <option key={f.family} value={f.family}>{f.family}</option>)}
+                      </Select>
+                    </Field>
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                      <label className="flex items-center gap-2"><input type="checkbox" checked={capStyle.bold} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, bold: e.target.checked })} /> Bold</label>
+                      <label className="flex items-center gap-2"><input type="checkbox" checked={capStyle.emphasize} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, emphasize: e.target.checked })} /> Make the spoken word bigger</label>
+                      <label className="flex items-center gap-2"><input type="checkbox" checked={capStyle.caps} disabled={!canWrite} onChange={(e) => setCapStyle({ ...capStyle, caps: e.target.checked })} /> All capitals</label>
+                      <Button disabled={!canWrite} onClick={() => setCapStyle(workspaceCaptions)}>Use the {isLegal ? 'Greene Legal Group' : 'Right Girl Media'} look</Button>
+                    </div>
+                  </div>
+                )}
                 <label className="flex items-start gap-3 text-sm">
                   <input type="checkbox" className="mt-1" checked={labelOn} disabled={!canWrite} onChange={(e) => setLabelOn(e.target.checked)} />
                   <span>
@@ -367,6 +458,7 @@ export default function Edit() {
               onSelect={setBeatId}
               steps={steps}
               labelOn={labelOn}
+              capsOn={capsOn}
               previewUrl={previewUrl}
               previewing={previewing}
               onPreview={(at) => void preview(at)}
@@ -571,8 +663,8 @@ function BeatStrip({ beats, duration, selectedId, onSelect, onAdd, canWrite, vid
   );
 }
 
-function ReviewPanel({ beat, index, total, beats, onSelect, steps, labelOn, previewUrl, previewing, onPreview, canRun, canWrite, isReviewer, act }: {
-  beat: Beat | null; index: number; total: number; beats: Beat[]; onSelect: (id: string) => void; steps: Step[]; labelOn: boolean; previewUrl: string | null; previewing: boolean;
+function ReviewPanel({ beat, index, total, beats, onSelect, steps, labelOn, capsOn, previewUrl, previewing, onPreview, canRun, canWrite, isReviewer, act }: {
+  beat: Beat | null; index: number; total: number; beats: Beat[]; onSelect: (id: string) => void; steps: Step[]; labelOn: boolean; capsOn: boolean; previewUrl: string | null; previewing: boolean;
   onPreview: (at: number) => void; canRun: boolean; canWrite: boolean; isReviewer: boolean; act: <T>(fn: () => Promise<T>, ok?: string) => Promise<T | null>;
 }) {
   const [request, setRequest] = useState('');
@@ -588,6 +680,7 @@ function ReviewPanel({ beat, index, total, beats, onSelect, steps, labelOn, prev
   }
   const st = STATUS[beat.status];
   const changed = steps.filter((s) => s.start < beat.endSec && s.end > beat.startSec).map((s) => `Applied "${s.fx}"${s.text ? ` with the text "${s.text}"` : ''}`);
+  if (capsOn) changed.push('Added word-by-word captions');
   if (labelOn) changed.push('Added the dramatization label');
   const save = (patch: Partial<Pick<Beat, 'title' | 'youSay' | 'onScreen' | 'visual' | 'animation'>>) => act(() => api.patch<Beat>(`/edit/beats/${beat.id}`, patch));
   const text = (key: 'youSay' | 'onScreen' | 'visual' | 'animation', label: string, rows = 2) => (

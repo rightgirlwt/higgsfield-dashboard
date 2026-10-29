@@ -4,7 +4,7 @@ import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
 import { approveBeat, beatCounts, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, suggestBeats, updateBeat } from '../services/beats';
 import {
-  DEFAULT_LABEL, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
+  captionFonts, captionsSchema, DEFAULT_LABEL, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
 
 export const edit = Router();
@@ -16,6 +16,13 @@ edit.get(
   wrap(async (_req, res) => {
     const engine = await engineStatus();
     res.json({ engine, effects: engine.ready ? await listEffects() : [] });
+  }),
+);
+
+edit.get(
+  '/fonts',
+  wrap(async (_req, res) => {
+    res.json((await captionFonts()).map((f) => ({ family: f.family, source: f.source })));
   }),
 );
 
@@ -48,7 +55,7 @@ edit.post(
 
 const noLabel = { enabled: false, text: DEFAULT_LABEL };
 const previewBody = z.object({
-  videoId: z.string().uuid(), steps: z.array(stepSchema).max(12).default([]), time: z.number().min(0).max(36_000), label: labelSchema.default(noLabel),
+  videoId: z.string().uuid(), steps: z.array(stepSchema).max(12).default([]), time: z.number().min(0).max(36_000), label: labelSchema.default(noLabel), captions: captionsSchema.optional(),
 });
 
 /** One frame with the effects applied, as a PNG. */
@@ -56,18 +63,18 @@ edit.post(
   '/preview',
   wrap(async (req, res) => {
     const b = previewBody.parse(req.body);
-    const png = await previewFrame(b.videoId, b.steps, b.time, b.label);
+    const png = await previewFrame(b.videoId, b.steps, b.time, b.label, b.captions);
     res.type('image/png').send(png);
   }),
 );
 
-const renderBody = z.object({ videoId: z.string().uuid(), steps: z.array(stepSchema).max(12).default([]), label: labelSchema.default(noLabel) });
+const renderBody = z.object({ videoId: z.string().uuid(), steps: z.array(stepSchema).max(12).default([]), label: labelSchema.default(noLabel), captions: captionsSchema.optional() });
 
 edit.post(
   '/render',
   wrap(async (req, res) => {
     const b = renderBody.parse(req.body);
-    const job = await startRender({ orgId: req.user!.orgId, workspaceId: req.workspace!.id, videoId: b.videoId, steps: b.steps, label: b.label });
+    const job = await startRender({ orgId: req.user!.orgId, workspaceId: req.workspace!.id, videoId: b.videoId, steps: b.steps, label: b.label, captions: b.captions });
     res.status(202).json(job);
   }),
 );

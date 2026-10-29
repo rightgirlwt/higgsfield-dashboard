@@ -8,6 +8,8 @@ import { getDb } from '../ctx';
 import { badRequest, HttpError, notFound } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { logger } from '../logger';
+import { buildAss, type Captions, captionsSchema, DEFAULT_CAPTIONS, styleSchema } from './captions';
+import { listFonts } from './fonts';
 
 /**
  * Video effects from the Claude "effects" skill (45 of them), run on this computer. Nothing here calls a paid service:
@@ -71,6 +73,8 @@ function run(cmd: string, args: string[], opts: { cwd?: string; timeoutMs: numbe
 let catalog: EffectInfo[] | null = null;
 
 /** The effects the engine offers, read from the engine itself so the list never drifts from what it can render. */
+export const captionFonts = () => listFonts(enginePaths().fonts);
+
 export async function listEffects(): Promise<EffectInfo[]> {
   if (catalog) return catalog;
   const { python, script } = enginePaths();
@@ -121,6 +125,7 @@ export async function buildPlan(steps: Step[]): Promise<string> {
 export interface EditPlan {
   steps: Step[];
   label: Label;
+  captions?: Captions;
 }
 
 export interface EditVideo {
@@ -255,7 +260,8 @@ export async function renameVideo(id: string, title: string): Promise<EditVideo>
   return record;
 }
 
-export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema });
+export { captionsSchema };
+export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema, captions: captionsSchema.optional() });
 
 export async function savePlan(id: string, plan: EditPlan): Promise<EditVideo> {
   const { record } = await videoFile(id);
@@ -266,8 +272,8 @@ export async function savePlan(id: string, plan: EditPlan): Promise<EditVideo> {
 
 // ---- previews -------------------------------------------------------------------------------------------
 /** One frame of the video with the effects applied at `time`. Quick, so options can be compared side by side. */
-export async function previewFrame(videoId: string, steps: Step[], time: number, label: Label = { enabled: false, text: DEFAULT_LABEL }): Promise<Buffer> {
-  if (steps.length === 0 && !label.enabled) throw badRequest('Add at least one effect or the label');
+export async function previewFrame(videoId: string, steps: Step[], time: number, label: Label = { enabled: false, text: DEFAULT_LABEL }, captions: Captions = DEFAULT_CAPTIONS): Promise<Buffer> {
+  if (steps.length === 0 && !label.enabled && !captions.enabled) throw badRequest('Add at least one effect, the captions or the label');
   const status = await engineStatus();
   if (!status.ready) throw badRequest(status.message);
   const { file } = await videoFile(videoId);
@@ -286,10 +292,11 @@ export async function previewFrame(videoId: string, steps: Step[], time: number,
         // Label only: the plain frame, so the label can be checked against the picture
         await run('ffmpeg', ['-v', 'error', '-y', '-ss', String(time), '-i', path.resolve(file), '-frames:v', '1', frame], { timeoutMs: 60_000 });
       }
-      if (label.enabled) {
-        const labeled = path.join(work, 'labeled.png');
-        await run('ffmpeg', ['-v', 'error', '-y', '-i', frame, '-vf', labelFilter(label.text), '-frames:v', '1', labeled], { cwd: enginePaths().fonts, timeoutMs: 60_000 });
-        frame = labeled;
+      const vf = await finishFilters(work, file, label, captions, videoId, time);
+      if (vf) {
+        const finished = path.join(work, 'finished.png');
+        await run('ffmpeg', ['-v', 'error', '-y', '-i', frame, '-vf', vf, '-frames:v', '1', finished], { cwd: work, timeoutMs: 60_000 });
+        frame = finished;
       }
     } catch (e) {
       if (e instanceof HttpError) throw e;
@@ -314,10 +321,43 @@ export function labelFilter(text: string): string {
   return `drawbox=x=0:y=ih-ih*0.075:w=iw:h=ih*0.075:color=black@0.78:t=fill,drawtext=fontfile=ArchivoBlack-Regular.ttf:text='${t}':fontcolor=white:fontsize=${size}:x=(w-text_w)/2:y=h-h*0.075/2-text_h/2`;
 }
 
-async function addLabel(input: string, output: string, text: string): Promise<void> {
-  const { fonts } = enginePaths();
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', path.resolve(input), '-vf', labelFilter(text), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-c:a', 'copy', '-movflags', '+faststart', path.resolve(output)], {
-    cwd: fonts, // the font is found by its file name, which avoids drive-letter escaping in the filter
+async function videoSize(file: string): Promise<{ w: number; h: number }> {
+  const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', path.resolve(file)], { timeoutMs: 30_000 });
+  const [w, h] = stdout.toString().trim().split(',').map(Number);
+  if (!w || !h) throw badRequest('Could not read the size of this video');
+  return { w, h };
+}
+
+/**
+ * The ffmpeg filters for captions and the label, or null when neither is on. The font and the subtitle file are put in `work`,
+ * which is where ffmpeg runs, so both are found by plain file name (this avoids drive-letter escaping in the filter).
+ * `offset` is for a single still frame: the captions are shifted so the frame shows what is said at that moment.
+ */
+async function finishFilters(work: string, videoFile: string, label: Label, captions: Captions, videoId: string, offset = 0): Promise<string | null> {
+  const filters: string[] = [];
+  if (captions.enabled || label.enabled) await fs.copyFile(path.join(enginePaths().fonts, 'ArchivoBlack-Regular.ttf'), path.join(work, 'ArchivoBlack-Regular.ttf'));
+  if (captions.enabled) {
+    // The chosen font is copied next to the subtitle file so ffmpeg finds it; an unknown name falls back to the default font
+    const wanted = captions.style?.font ?? 'Archivo Black';
+    const font = (await listFonts(enginePaths().fonts)).find((f) => f.family.toLowerCase() === wanted.toLowerCase());
+    const style = font ? captions.style : { ...(captions.style ?? styleSchema.parse({})), font: 'Archivo Black' };
+    // In its own folder: ffmpeg tries to load every file in the fonts folder as a font
+    await fs.mkdir(path.join(work, 'fonts'), { recursive: true });
+    if (font) await fs.copyFile(font.file, path.join(work, 'fonts', path.basename(font.file)));
+    else await fs.copyFile(path.join(enginePaths().fonts, 'ArchivoBlack-Regular.ttf'), path.join(work, 'fonts', 'ArchivoBlack-Regular.ttf'));
+    const words = await getWords(videoId);
+    if (words.length === 0) throw badRequest('No speech was found in this video, so there is nothing to caption.');
+    const { w, h } = await videoSize(videoFile);
+    await fs.writeFile(path.join(work, 'captions.ass'), buildAss(words, w, h, captions.wordsPerLine, offset, style));
+    filters.push('ass=captions.ass:fontsdir=fonts');
+  }
+  if (label.enabled) filters.push(labelFilter(label.text));
+  return filters.length ? filters.join(',') : null;
+}
+
+async function addFinish(input: string, output: string, vf: string, work: string): Promise<void> {
+  await run('ffmpeg', ['-v', 'error', '-y', '-i', path.resolve(input), '-vf', vf, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-c:a', 'copy', '-movflags', '+faststart', path.resolve(output)], {
+    cwd: work,
     timeoutMs: 600_000,
   });
 }
@@ -339,13 +379,15 @@ export interface RenderInput {
   videoId: string;
   steps: Step[];
   label: Label;
+  captions?: Captions;
 }
 
 /** Starts the render in the background and returns at once; poll the job for progress. */
 export async function startRender(r: RenderInput): Promise<RenderJob> {
   const status = await engineStatus();
   if (!status.ready) throw badRequest(status.message);
-  if (r.steps.length === 0 && !r.label.enabled) throw badRequest('Add at least one effect or the label');
+  const captions = r.captions ?? DEFAULT_CAPTIONS;
+  if (r.steps.length === 0 && !r.label.enabled && !captions.enabled) throw badRequest('Add at least one effect, the captions or the label');
   const { file, record } = await videoFile(r.videoId);
   const plan = r.steps.length > 0 ? await buildPlan(r.steps) : null;
   const job: RenderJob = { id: crypto.randomUUID(), status: 'running', message: 'Rendering the effects. This takes a few minutes.' };
@@ -364,17 +406,19 @@ export async function startRender(r: RenderInput): Promise<RenderJob> {
       }
       const id = crypto.randomUUID();
       const finalFile = dir('out', `${id}.mp4`);
-      if (r.label.enabled) {
-        job.message = 'Adding the label';
-        await addLabel(rendered, finalFile, r.label.text);
+      if (captions.enabled) job.message = 'Listening to the video for captions';
+      const vf = await finishFilters(work, file, r.label, captions, r.videoId);
+      if (vf) {
+        job.message = captions.enabled ? 'Adding captions and label' : 'Adding the label';
+        await addFinish(rendered, finalFile, vf, work);
       } else {
         await fs.copyFile(rendered, finalFile);
       }
-      const title = `${record.name.replace(/\.[^.]+$/, '')} (${[r.steps.length ? 'effects' : '', r.label.enabled ? 'labeled' : ''].filter(Boolean).join(', ')})`;
+      const title = `${record.name.replace(/\.[^.]+$/, '')} (${[r.steps.length ? 'effects' : '', captions.enabled ? 'captions' : '', r.label.enabled ? 'labeled' : ''].filter(Boolean).join(', ')})`;
       const url = `/api/edit/files/${id}.mp4`;
       const { rows } = await getDb().query<{ id: string }>(
         `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workspace_id) VALUES ($1,'video',$2,$3,$4,$5,$6::jsonb,$7) RETURNING id`,
-        [r.orgId, title, url, placeholderImage(title, 'video'), ['edit', 'effects'], JSON.stringify({ source: 'edit', effects: r.steps.map((s) => s.fx), labeled: r.label.enabled, sourceVideo: record.name }), r.workspaceId],
+        [r.orgId, title, url, placeholderImage(title, 'video'), ['edit', 'effects'], JSON.stringify({ source: 'edit', effects: r.steps.map((s) => s.fx), labeled: r.label.enabled, captions: captions.enabled, sourceVideo: record.name }), r.workspaceId],
       );
       job.fileName = `${id}.mp4`;
       job.mediaId = rows[0].id;
