@@ -2,7 +2,10 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { getDb } from '../ctx';
 import { badRequest, notFound } from '../lib/errors';
-import { getVideo } from './effects';
+import { calcCostUsd, estimateTokens } from '../lib/pricing';
+import { getVideo, getWords, type Word } from './effects';
+import { runPrompt } from './claude';
+import { recordUsage } from './usage';
 
 export const BEAT_STATUSES = ['draft', 'in_review', 'changes_needed', 'approved'] as const;
 export type BeatStatus = (typeof BEAT_STATUSES)[number];
@@ -63,6 +66,101 @@ export async function createBeat(orgId: string, userId: string, videoId: string,
     [orgId, videoId, pos, b.title, b.startSec, b.endSec, b.youSay, b.onScreen, b.visual, b.animation, userId],
   );
   return mapBeat(rows[0]);
+}
+
+export interface BeatCounts {
+  total: number;
+  draft: number;
+  in_review: number;
+  changes_needed: number;
+  approved: number;
+}
+
+/** How many beats of each video are in each state, for the list of edits. */
+export async function beatCounts(orgId: string): Promise<Map<string, BeatCounts>> {
+  const { rows } = await getDb().query<{ video_id: string; status: BeatStatus; n: number }>(
+    'SELECT video_id, status, COUNT(*)::int AS n FROM video_beats WHERE org_id=$1 GROUP BY video_id, status',
+    [orgId],
+  );
+  const map = new Map<string, BeatCounts>();
+  for (const r of rows) {
+    const c = map.get(r.video_id) ?? { total: 0, draft: 0, in_review: 0, changes_needed: 0, approved: 0 };
+    c[r.status] += r.n;
+    c.total += r.n;
+    map.set(r.video_id, c);
+  }
+  return map;
+}
+
+// ---- suggested beats ------------------------------------------------------------------------------------
+const SUGGEST_MODEL = 'claude-sonnet-5-5';
+const SUGGEST_MAX_OUT = 1500;
+
+export interface SuggestedBeat {
+  title: string;
+  startSec: number;
+  endSec: number;
+  youSay: string;
+}
+
+/** The transcript as "[12.3] words said..." lines, one per pause, so Claude can see where the video breaks naturally. */
+function transcriptText(words: Word[]): string {
+  const lines: string[] = [];
+  let cur: Word[] = [];
+  const flush = () => {
+    if (cur.length) lines.push(`[${cur[0].s.toFixed(1)}-${cur[cur.length - 1].e.toFixed(1)}] ${cur.map((w) => w.w).join(' ')}`);
+    cur = [];
+  };
+  for (const w of words) {
+    if (cur.length && (w.s - cur[cur.length - 1].e > 0.6 || cur.length >= 14)) flush();
+    cur.push(w);
+  }
+  flush();
+  return lines.join('\n');
+}
+
+const SYSTEM =
+  'You split a short-form social video into beats for an editor. A beat is one idea: the hook, each tip or step, the payoff, the call to action. ' +
+  'Use the timestamps in the transcript. Beats must not overlap, must be in time order, and each must end after it starts. ' +
+  'Aim for 3 to 8 beats. Titles are 2 to 4 words. "youSay" is the words spoken in that beat, copied from the transcript. ' +
+  'Answer with only a JSON array of objects {"title","startSec","endSec","youSay"} and nothing else.';
+
+async function suggestPrompt(videoId: string, durationSec: number | null) {
+  const words = await getWords(videoId);
+  if (words.length === 0) throw badRequest('No speech was found in this video, so there is nothing to split into beats.');
+  const user = `Video length: ${durationSec ?? words[words.length - 1].e} seconds.\n\nTranscript:\n${transcriptText(words)}`;
+  return { user, inputTokens: estimateTokens(SYSTEM + user) };
+}
+
+/** Free to call: transcribes locally and says what the Claude step would cost. Nothing is spent until `approved`. */
+export async function suggestBeats(orgId: string, videoId: string, approved: boolean) {
+  const video = await getVideo(videoId);
+  const { user, inputTokens } = await suggestPrompt(videoId, video.durationSec);
+  const estimateUsd = calcCostUsd(SUGGEST_MODEL, inputTokens, SUGGEST_MAX_OUT / 2);
+  if (!approved) return { approved: false as const, model: SUGGEST_MODEL, estimateUsd, maxUsd: calcCostUsd(SUGGEST_MODEL, inputTokens, SUGGEST_MAX_OUT) };
+  const res = await runPrompt(orgId, { model: SUGGEST_MODEL, system: SYSTEM, user, maxTokens: SUGGEST_MAX_OUT });
+  await recordUsage({ orgId, provider: 'claude', model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd, simulated: res.simulated });
+  if (res.simulated) throw badRequest('Add your Anthropic key in Settings to get beat suggestions.');
+  return { approved: true as const, costUsd: res.costUsd, beats: parseSuggested(res.text, video.durationSec) };
+}
+
+export function parseSuggested(text: string, durationSec: number | null): SuggestedBeat[] {
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) throw badRequest('Claude did not return beats. Try again.');
+  let raw: unknown;
+  try {
+    raw = JSON.parse(m[0]);
+  } catch {
+    throw badRequest('Claude did not return beats. Try again.');
+  }
+  const parsed = z.array(z.object({ title: z.string(), startSec: z.number(), endSec: z.number(), youSay: z.string().default('') })).safeParse(raw);
+  if (!parsed.success) throw badRequest('Claude did not return beats. Try again.');
+  const max = durationSec ?? Infinity;
+  return parsed.data
+    .map((b) => ({ title: b.title.slice(0, 80), startSec: Math.max(0, b.startSec), endSec: Math.min(max, b.endSec), youSay: b.youSay.slice(0, 1000) }))
+    .filter((b) => b.endSec > b.startSec)
+    .sort((a, b) => a.startSec - b.startSec)
+    .slice(0, 12);
 }
 
 async function load(orgId: string, id: string) {

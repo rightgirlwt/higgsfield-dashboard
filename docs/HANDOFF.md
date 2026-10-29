@@ -47,6 +47,9 @@ Written 2026-10-18. Single-user tool for Elle. Not hosted, not for sharing over 
 - **Setup on a new computer:** clone `https://github.com/Vibha-Ramprakash/claude-video-effects` into `~/.claude/skills/effects`, install Python 3.12 (`winget install Python.Python.3.12`) and ffmpeg, then in that folder run `python -m venv .venv` and `.venv\Scripts\python.exe -m pip install -r requirements.txt`. Set `EFFECTS_DIR` if it lives elsewhere. Uploaded videos and results are in `backend/.data/edit` (back it up with the rest of `.data`).
 - Finished edits are served from `/api/edit/files/<random id>.mp4` without a login (the browser's video player cannot send one). The names cannot be guessed, but do not host this publicly without changing that.
 
+- **Review beat by beat:** each video is split into beats (hook, tips, CTA) with a status (draft, in review, changes needed, approved). Ruth edits and submits; only the admin login approves or requests changes, and each line of a change request becomes a checklist item. Editing an approved beat sends it back to draft. Tables: `video_beats` (migration 5).
+- **Suggest beats:** the Editing page can propose beats from what is said. Step one transcribes on this computer (the skill's `scripts/words.py`, faster-whisper; the first run installs it and downloads a small speech model, about a minute) and shows the Claude price (Sonnet 5.5, a few cents). Nothing is spent until the button "Confirm and suggest" is pressed. Needs the Anthropic key in Settings. The transcript is kept beside the video as `<id>.words.json`.
+
 ## Instagram carousel (separate from the dashboard)
 - Topic: why unused Higgsfield credits do not roll over, and Elle built her own studio on the API.
 - Slide 1 is Elle's own finished graphic. Slides 2 to 7 were made in Studio with the copy written inside a dark holographic panel. Cost about $1.26 on top of earlier tests ($0.12 per new image, $0.09 per text edit).

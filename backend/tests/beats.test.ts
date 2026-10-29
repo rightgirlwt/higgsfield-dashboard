@@ -10,7 +10,7 @@ import { setDb } from '../src/ctx';
 import { createDb, type Db } from '../src/db';
 import { migrate } from '../src/db/migrations';
 import { seedDemo } from '../src/db/seed';
-import { requestToAdjustments } from '../src/services/beats';
+import { parseSuggested, requestToAdjustments } from '../src/services/beats';
 
 let db: Db;
 let server: http.Server;
@@ -60,6 +60,15 @@ describe('beats', () => {
     expect(items.every((i) => !i.done && i.id)).toBe(true);
   });
 
+  it('reads Claude\'s suggested beats, dropping bad ranges and trimming to the video length', () => {
+    const text = 'Here you go:\n```json\n[{"title":"Hook","startSec":0,"endSec":4,"youSay":"Hi"},{"title":"Bad","startSec":6,"endSec":6},{"title":"Tip","startSec":4,"endSec":99,"youSay":"x"}]\n```';
+    expect(parseSuggested(text, 10)).toEqual([
+      { title: 'Hook', startSec: 0, endSec: 4, youSay: 'Hi' },
+      { title: 'Tip', startSec: 4, endSec: 10, youSay: 'x' },
+    ]);
+    expect(() => parseSuggested('no beats here', 10)).toThrow();
+  });
+
   it('lets the team add beats, lists them in time order, and rejects a beat that ends before it starts', async () => {
     expect((await call('POST', `/edit/videos/${videoId}/beats`, 'user', { title: 'Tip 1', startSec: 5, endSec: 9 })).status).toBe(201);
     expect((await call('POST', `/edit/videos/${videoId}/beats`, 'user', { title: 'Hook', startSec: 0, endSec: 5, youSay: 'Here are three things' })).status).toBe(201);
@@ -106,6 +115,15 @@ describe('beats', () => {
     expect((await call('PUT', `/edit/videos/${videoId}/plan`, 'user', plan)).status).toBe(200);
     const videos = (await call('GET', '/edit/videos', 'admin')).json as { id: string; plan?: typeof plan }[];
     expect(videos.find((v) => v.id === videoId)?.plan).toEqual(plan);
+  });
+
+  it('lists each video with its beat roll-up, who added it, and lets the team rename it', async () => {
+    const before = (await call('GET', '/edit/videos', 'user')).json.find((v: { id: string }) => v.id === videoId);
+    expect(before.beats.total).toBe(2);
+    expect(before.beats.draft + before.beats.approved + before.beats.in_review + before.beats.changes_needed).toBe(2);
+    expect(before.addedBy).toBeTruthy();
+    const renamed = (await call('PATCH', `/edit/videos/${videoId}`, 'user', { title: '  Milo   negotiation tips ' })).json;
+    expect(renamed.title).toBe('Milo negotiation tips');
   });
 
   it('deletes a beat', async () => {

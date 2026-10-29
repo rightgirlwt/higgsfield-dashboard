@@ -1,9 +1,10 @@
-import { Check, Film, Play, Plus, Send, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, Check, Film, Play, Plus, Send, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useCan } from '../auth/context';
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Select, Skeleton, Textarea } from '../components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Skeleton, Textarea } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
+import { timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
 import { useToast } from '../state/Toast';
 
@@ -22,9 +23,20 @@ interface ApiStep {
   text?: string;
   options: Record<string, string | number>;
 }
+interface BeatCounts {
+  total: number;
+  draft: number;
+  in_review: number;
+  changes_needed: number;
+  approved: number;
+}
 interface Video {
   id: string;
   name: string;
+  title?: string;
+  addedBy?: string;
+  createdAt: string;
+  beats: BeatCounts;
   durationSec: number | null;
   plan?: { steps: ApiStep[]; label: { enabled: boolean; text: string } };
 }
@@ -115,9 +127,6 @@ export default function Edit() {
   const workspaceName = workspaces.data?.workspaces.find((w) => w.id === workspaces.data?.current)?.name ?? '';
   const isLegal = /greene legal/i.test(workspaceName);
 
-  useEffect(() => {
-    if (!videoId && videos.data?.length) setVideoId(videos.data[0].id);
-  }, [videos.data, videoId]);
   useEffect(() => () => void (previewUrl && URL.revokeObjectURL(previewUrl)), [previewUrl]);
 
   // Load the saved edit when a video is chosen, so Elle and Ruth see the same effects and label.
@@ -237,24 +246,34 @@ export default function Edit() {
         <EmptyState title="The effects engine is not set up" hint={effects.data.engine.message} />
       ) : (
         <div className="space-y-6">
-          <Card className="p-5">
-            <CardHeader eyebrow="1" title="Video" />
-            <div className="flex flex-wrap items-center gap-3">
-              <Select aria-label="Video" className="min-w-0 flex-1" value={videoId} onChange={(e) => setVideoId(e.target.value)} disabled={!videos.data?.length}>
-                {!videos.data?.length && <option value="">No videos yet</option>}
-                {videos.data?.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name}{v.durationSec ? ` (${v.durationSec}s)` : ''}</option>
-                ))}
-              </Select>
-              <input ref={fileInput} type="file" accept={VIDEO_ACCEPT} hidden onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} />
-              <Button loading={uploading} disabled={!canWrite} onClick={() => fileInput.current?.click()}>
-                <Upload className="h-4 w-4" aria-hidden /> Add a video
-              </Button>
-            </div>
-            <p className="mt-2 text-xs text-slate-500">MP4, MOV or WebM, up to 500 MB. Videos are kept in the workspace you are in{workspaceName ? ` (${workspaceName})` : ''}.</p>
-          </Card>
+          <input ref={fileInput} type="file" accept={VIDEO_ACCEPT} hidden onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} />
+          {!videoId ? (
+            <EditList videos={videos.data} loading={!videos.data && !videos.error} canWrite={canWrite} uploading={uploading} workspaceName={workspaceName} onOpen={setVideoId} onAdd={() => fileInput.current?.click()} isReviewer={isReviewer} />
+          ) : (
+            <Card className="p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Button onClick={() => { setVideoId(''); videos.reload(); }}>
+                  <ArrowLeft className="h-4 w-4" aria-hidden /> All edits
+                </Button>
+                <Input
+                  aria-label="Edit name"
+                  className="min-w-0 flex-1 font-semibold"
+                  key={video?.id}
+                  defaultValue={video?.title || video?.name || ''}
+                  disabled={!canWrite}
+                  onBlur={(e) => {
+                    const t = e.target.value.trim();
+                    if (video && t && t !== (video.title || video.name)) api.patch(`/edit/videos/${video.id}`, { title: t }).then(videos.reload).catch((er) => toast.error(errorMessage(er)));
+                  }}
+                />
+                <span className="text-xs text-slate-500">{video?.addedBy ? `Added by ${video.addedBy}` : ''}{video?.durationSec ? ` · ${video.durationSec}s` : ''}</span>
+              </div>
+            </Card>
+          )}
 
-          {videoId && <BeatStrip beats={beatList} duration={duration} selectedId={beat?.id ?? ''} onSelect={setBeatId} onAdd={addBeat} canWrite={canWrite} />}
+          {videoId && (
+          <>
+          <BeatStrip beats={beatList} duration={duration} selectedId={beat?.id ?? ''} onSelect={setBeatId} onAdd={addBeat} canWrite={canWrite} videoId={videoId} onSuggested={beats.reload} />
 
           <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
             <div className="space-y-6">
@@ -357,16 +376,130 @@ export default function Edit() {
               act={act}
             />
           </div>
+          </>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-/** The video as numbered beats, each as wide as it lasts. */
-function BeatStrip({ beats, duration, selectedId, onSelect, onAdd, canWrite }: {
-  beats: Beat[]; duration: number; selectedId: string; onSelect: (id: string) => void; onAdd: (b: { title: string; startSec: number; endSec: number }) => void; canWrite: boolean;
+/** The worst state across a video's beats is the one that needs attention first. */
+function overall(c: BeatCounts): BeatStatus | 'none' {
+  if (c.total === 0) return 'none';
+  if (c.changes_needed) return 'changes_needed';
+  if (c.in_review) return 'in_review';
+  if (c.draft) return 'draft';
+  return 'approved';
+}
+
+type ListFilter = 'all' | 'in_review' | 'changes_needed' | 'approved';
+
+/** Every edit in this workspace as a card, so each one's storyboard can be opened and reviewed on its own. */
+function EditList({ videos, loading, canWrite, uploading, workspaceName, onOpen, onAdd, isReviewer }: {
+  videos: Video[] | null; loading: boolean; canWrite: boolean; uploading: boolean; workspaceName: string; onOpen: (id: string) => void; onAdd: () => void; isReviewer: boolean;
 }) {
+  const [filter, setFilter] = useState<ListFilter>('all');
+  const list = (videos ?? []).filter((v) => filter === 'all' || overall(v.beats) === filter);
+  const count = (f: ListFilter) => (videos ?? []).filter((v) => f === 'all' || overall(v.beats) === f).length;
+  const tabs: { id: ListFilter; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'in_review', label: isReviewer ? 'Needs my review' : 'In review' },
+    { id: 'changes_needed', label: 'Changes requested' },
+    { id: 'approved', label: 'Approved' },
+  ];
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <CardHeader eyebrow="Edits" title={workspaceName ? `Videos in ${workspaceName}` : 'Videos'} />
+        <Button variant="primary" loading={uploading} disabled={!canWrite} onClick={onAdd}>
+          <Upload className="h-4 w-4" aria-hidden /> Add a video
+        </Button>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Filter edits">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={filter === t.id}
+            onClick={() => setFilter(t.id)}
+            className={`rounded-full border px-3 py-1 text-xs transition ${filter === t.id ? 'border-cyan-500 bg-cyan-500/10 font-semibold' : 'border-slate-800 hover:border-slate-700'}`}
+          >
+            {t.label} ({count(t.id)})
+          </button>
+        ))}
+      </div>
+      {loading ? (
+        <Skeleton className="h-40" />
+      ) : list.length === 0 ? (
+        <EmptyState title={videos?.length ? 'Nothing here' : 'No videos yet'} hint={videos?.length ? 'No edit is in this state right now.' : 'Add a video to start its storyboard. MP4, MOV or WebM, up to 500 MB.'} />
+      ) : (
+        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {list.map((v) => {
+            const st = overall(v.beats);
+            return (
+              <li key={v.id}>
+                <button onClick={() => onOpen(v.id)} className="w-full rounded-xl border border-slate-800 p-4 text-left transition hover:border-cyan-500/60">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">{v.title || v.name}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {v.addedBy ? `${v.addedBy} · ` : ''}{timeAgo(v.createdAt)}{v.durationSec ? ` · ${v.durationSec}s` : ''}
+                      </div>
+                    </div>
+                    {st === 'none' ? <Badge tone="slate">NO BEATS</Badge> : <Badge tone={STATUS[st].tone}>{STATUS[st].label}</Badge>}
+                  </div>
+                  <div className="mt-3 flex gap-0.5" aria-hidden>
+                    {v.beats.total === 0 ? <span className="h-1.5 w-full rounded bg-slate-800" /> : null}
+                    {(['approved', 'in_review', 'changes_needed', 'draft'] as const).map((s) =>
+                      v.beats[s] ? <span key={s} style={{ flexGrow: v.beats[s] }} className={`h-1.5 rounded ${s === 'approved' ? 'bg-emerald-400' : s === 'changes_needed' ? 'bg-amber-400' : s === 'in_review' ? 'bg-cyan-400' : 'bg-slate-600'}`} /> : null,
+                    )}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">{v.beats.total ? `${v.beats.approved} of ${v.beats.total} beats approved` : 'Open to add beats'}</div>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+/** The video as numbered beats, each as wide as it lasts. */
+function BeatStrip({ beats, duration, selectedId, onSelect, onAdd, canWrite, videoId, onSuggested }: {
+  beats: Beat[]; duration: number; selectedId: string; onSelect: (id: string) => void; onAdd: (b: { title: string; startSec: number; endSec: number }) => void; canWrite: boolean;
+  videoId: string; onSuggested: () => void;
+}) {
+  const toast = useToast();
+  const [quote, setQuote] = useState<{ estimateUsd: number; maxUsd: number } | null>(null);
+  const [busy, setBusy] = useState<'quote' | 'run' | null>(null);
+
+  // Step 1 is free (transcribing runs on this computer); step 2 only happens after Elle sees the price and confirms.
+  async function getQuote() {
+    setBusy('quote');
+    try {
+      setQuote(await api.post<{ estimateUsd: number; maxUsd: number }>(`/edit/videos/${videoId}/suggest-beats`, { approved: false }));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function runSuggest() {
+    setBusy('run');
+    try {
+      const r = await api.post<{ costUsd: number; beats: { title: string; startSec: number; endSec: number; youSay: string }[] }>(`/edit/videos/${videoId}/suggest-beats`, { approved: true });
+      for (const b of r.beats) await api.post(`/edit/videos/${videoId}/beats`, b);
+      onSuggested();
+      setQuote(null);
+      toast.success(`Added ${r.beats.length} beats (cost ${usd(r.costUsd)}).`);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
   const lastEnd = beats.reduce((m, b) => Math.max(m, b.endSec), 0);
   const [title, setTitle] = useState('');
   const [start, setStart] = useState('');
@@ -396,6 +529,24 @@ function BeatStrip({ beats, duration, selectedId, onSelect, onAdd, canWrite }: {
               <div className="truncate">{b.title || 'Untitled'}</div>
             </button>
           ))}
+        </div>
+      )}
+      {canWrite && beats.length === 0 && (
+        <div className="mt-3 rounded-xl border border-slate-800 p-3 text-sm">
+          {!quote ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-slate-400">Let Claude propose the beats from what is said in the video. Step one is free: it listens on this computer, then shows the price.</span>
+              <Button loading={busy === 'quote'} onClick={() => void getQuote()}><Sparkles className="h-4 w-4" aria-hidden /> Suggest beats</Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>This will cost about <strong>{usd(quote.estimateUsd)}</strong> (at most {usd(quote.maxUsd)}) on your Claude account. Nothing is spent until you confirm.</span>
+              <span className="flex gap-2">
+                <Button onClick={() => setQuote(null)} disabled={busy === 'run'}>Cancel</Button>
+                <Button variant="primary" loading={busy === 'run'} onClick={() => void runSuggest()}>Confirm and suggest</Button>
+              </span>
+            </div>
+          )}
         </div>
       )}
       {canWrite && (

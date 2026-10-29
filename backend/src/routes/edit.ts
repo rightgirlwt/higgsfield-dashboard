@@ -2,9 +2,9 @@ import express, { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
-import { approveBeat, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, updateBeat } from '../services/beats';
+import { approveBeat, beatCounts, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, suggestBeats, updateBeat } from '../services/beats';
 import {
-  DEFAULT_LABEL, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, saveUpload, savePlan, startRender, stepSchema,
+  DEFAULT_LABEL, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
 
 export const edit = Router();
@@ -22,7 +22,17 @@ edit.get(
 edit.get(
   '/videos',
   wrap(async (req, res) => {
-    res.json(await listVideos(req.workspace!.id, req.workspace!.isDefault));
+    const videos = await listVideos(req.workspace!.id, req.workspace!.isDefault);
+    const counts = await beatCounts(req.user!.orgId);
+    res.json(videos.map((v) => ({ ...v, beats: counts.get(v.id) ?? { total: 0, draft: 0, in_review: 0, changes_needed: 0, approved: 0 } })));
+  }),
+);
+
+edit.patch(
+  '/videos/:id',
+  wrap(async (req, res) => {
+    const { title } = z.object({ title: z.string().max(120) }).parse(req.body);
+    res.json(await renameVideo(req.params.id, title));
   }),
 );
 
@@ -32,7 +42,7 @@ edit.post(
   wrap(async (req, res) => {
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body)) throw new HttpError(415, 'Use an MP4, MOV or WebM video.', 'unsupported');
-    res.status(201).json(await saveUpload(body, typeOf(req), String(req.query.filename ?? 'video'), req.workspace!.id));
+    res.status(201).json(await saveUpload(body, typeOf(req), String(req.query.filename ?? 'video'), req.workspace!.id, req.user!.name));
   }),
 );
 
@@ -81,6 +91,15 @@ edit.post(
   '/videos/:id/beats',
   wrap(async (req, res) => {
     res.status(201).json(await createBeat(req.user!.orgId, req.user!.id, req.params.id, beatCreate.parse(req.body)));
+  }),
+);
+
+/** Step 1 (approved: false) transcribes for free and returns the price; step 2 (approved: true) spends it. */
+edit.post(
+  '/videos/:id/suggest-beats',
+  wrap(async (req, res) => {
+    const { approved } = z.object({ approved: z.boolean().default(false) }).parse(req.body ?? {});
+    res.json(await suggestBeats(req.user!.orgId, req.params.id, approved));
   }),
 );
 

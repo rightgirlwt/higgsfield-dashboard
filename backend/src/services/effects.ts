@@ -131,6 +131,9 @@ export interface EditVideo {
   createdAt: string;
   kind: 'source' | 'result';
   plan?: EditPlan;
+  /** A name the team chooses; falls back to the file name. */
+  title?: string;
+  addedBy?: string;
 }
 
 const VIDEO_TYPES: Record<string, string> = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm' };
@@ -155,7 +158,7 @@ async function writeRecord(v: EditVideo): Promise<void> {
   await fs.writeFile(dir('videos', `${v.id}.json`), JSON.stringify(v));
 }
 
-export async function saveUpload(body: Buffer, contentType: string, name: string, workspaceId: string | null): Promise<EditVideo> {
+export async function saveUpload(body: Buffer, contentType: string, name: string, workspaceId: string | null, addedBy = ''): Promise<EditVideo> {
   const ext = VIDEO_TYPES[contentType];
   if (!ext) throw badRequest('Use an MP4, MOV or WebM video.');
   if (body.length === 0) throw badRequest('The file is empty');
@@ -164,7 +167,7 @@ export async function saveUpload(body: Buffer, contentType: string, name: string
   const file = dir('videos', id + ext);
   await fs.writeFile(file, body);
   const v: EditVideo = {
-    id, name: name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'video', durationSec: await duration(file), workspaceId, createdAt: new Date().toISOString(), kind: 'source',
+    id, name: name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'video', durationSec: await duration(file), workspaceId, createdAt: new Date().toISOString(), kind: 'source', addedBy: addedBy.slice(0, 80),
   };
   await writeRecord(v);
   return v;
@@ -178,7 +181,7 @@ export async function listVideos(workspaceId: string, isDefaultWorkspace: boolea
     return [];
   }
   const all: EditVideo[] = [];
-  for (const n of names.filter((x) => x.endsWith('.json'))) {
+  for (const n of names.filter((x) => x.endsWith('.json') && !x.endsWith('.words.json'))) {
     try {
       all.push(JSON.parse(await fs.readFile(dir('videos', n), 'utf8')) as EditVideo);
     } catch {
@@ -212,6 +215,44 @@ async function videoFile(id: string): Promise<{ file: string; record: EditVideo 
 
 export async function getVideo(id: string): Promise<EditVideo> {
   return (await videoFile(id)).record;
+}
+
+// ---- transcript (runs on this computer, free) -------------------------------------------------------------
+export interface Word {
+  w: string;
+  s: number;
+  e: number;
+}
+
+/** Each word with when it starts and ends. Made once with the skill's words.py (faster-whisper), then kept beside the video. */
+export async function getWords(videoId: string): Promise<Word[]> {
+  const { file } = await videoFile(videoId);
+  const out = file.replace(/\.[^.]+$/, '.words.json');
+  try {
+    return JSON.parse(await fs.readFile(out, 'utf8')) as Word[];
+  } catch {
+    /* not transcribed yet */
+  }
+  const { python, fonts } = enginePaths();
+  const script = path.join(path.dirname(fonts), 'scripts', 'words.py');
+  try {
+    await fs.access(script);
+  } catch {
+    throw badRequest('The transcriber is missing (scripts/words.py in the effects skill). See docs/HANDOFF.md, "Video effects".');
+  }
+  try {
+    await run(python, [script, path.resolve(file)], { timeoutMs: 20 * 60_000 });
+  } catch (e) {
+    throw new HttpError(502, `Could not transcribe this video: ${e instanceof Error ? e.message : String(e)}`, 'transcribe_failed');
+  }
+  return JSON.parse(await fs.readFile(out, 'utf8')) as Word[];
+}
+
+export async function renameVideo(id: string, title: string): Promise<EditVideo> {
+  const { record } = await videoFile(id);
+  record.title = title.replace(/\s+/g, ' ').trim().slice(0, 120) || undefined;
+  await writeRecord(record);
+  return record;
 }
 
 export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema });
