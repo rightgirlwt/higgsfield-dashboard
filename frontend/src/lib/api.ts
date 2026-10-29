@@ -85,6 +85,11 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => json<T>('PATCH', path, body ?? {}),
   del: <T = void>(path: string) => json<T>('DELETE', path),
 
+  /** POST JSON and get a file back (e.g. a preview image). */
+  async postBlob(path: string, body: unknown): Promise<Blob> {
+    return (await request('POST', path, body)).blob();
+  },
+
   /** Upload a raw file body (the server hosts it on Higgsfield and returns a public URL). */
   async upload<T>(path: string, file: File, contentType?: string): Promise<T> {
     const token = await tokenProvider();

@@ -1,4 +1,4 @@
-import { Activity, Bell, Camera, Clapperboard, LayoutGrid, LogOut, Menu, MessageSquareText, Mic, Moon, Search, Settings, Sparkles, Sun, Workflow, X } from 'lucide-react';
+import { Activity, Bell, Camera, Clapperboard, LayoutGrid, LogOut, Menu, MessageSquareText, Mic, Moon, Search, Settings, Sparkles, Sun, Wand2, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/context';
@@ -16,6 +16,7 @@ const nav = [
   { to: '/projects', label: 'Projects', icon: Clapperboard },
   { to: '/studio', label: 'Studio', icon: Sparkles },
   { to: '/voices', label: 'Voices', icon: Mic },
+  { to: '/edit', label: 'Editing', icon: Wand2 },
   { to: '/prompts', label: 'Prompts', icon: MessageSquareText },
   { to: '/workflows', label: 'Workflows', icon: Workflow },
   { to: '/media', label: 'Media', icon: Camera },

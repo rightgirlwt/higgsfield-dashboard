@@ -34,6 +34,19 @@ Written 2026-10-18. Single-user tool for Elle. Not hosted, not for sharing over 
 - Match voices **by name** each time. Ids change when a voice is edited.
 - Higgsfield web-account Soul IDs are not usable by the API key. Character consistency uses reference images (Grok Imagine accepts up to 5).
 
+## Workspaces and roles (added 2026-10-28)
+- **Workspaces:** Right Girl Media (first, the default) and Greene Legal Group. One login sees both through the switcher at the top of the sidebar. Projects, the media library and uploaded edit videos are kept per workspace. Content saved before workspaces existed belongs to Right Girl Media. Spend totals, prompts and workflows are still shared across workspaces.
+- **Roles:** Admin and Team (stored as `admin` and `user`; the old `viewer` role still exists but is no longer offered). Team can create, edit and generate in every workspace and sees prices, charges, the monthly budget and account balances for reports. Only Admin sees keys and can change keys, prices, budget and balances.
+- **Spending rule:** Ruth knows what needs Elle's approval; the dashboard does not queue her runs for approval.
+- A copy of the database was saved in `backend/.data/backups` before the workspace change was applied.
+
+## Video effects (added 2026-10-28)
+- The **Editing** page adds effects from the Claude "effects" skill (45 of them, by @vibha.in.progress, MIT licence) to a video: gallery, per-effect start, end, text and colour, a single-frame preview (about 20 to 30 seconds), and a full render. Everything runs on this computer and costs nothing. Results are saved in the Media library of the current workspace.
+- **Best on a person facing the camera.** The effects follow the face; text can be cut off at the edges on other footage, such as wide AI-generated scenes.
+- **Optional label:** a toggle ("Add the dramatization label for the whole video", not one of the 45 effects) adds a solid bar across the bottom with editable text, default `DRAMATIZATION | AI-GENERATED VIDEO`. It is off unless turned on and can be used alone with no effects. On Greene Legal Group the page warns when it is off. Effects are listed alphabetically. The page is called Editing (`/edit`).
+- **Setup on a new computer:** clone `https://github.com/Vibha-Ramprakash/claude-video-effects` into `~/.claude/skills/effects`, install Python 3.12 (`winget install Python.Python.3.12`) and ffmpeg, then in that folder run `python -m venv .venv` and `.venv\Scripts\python.exe -m pip install -r requirements.txt`. Set `EFFECTS_DIR` if it lives elsewhere. Uploaded videos and results are in `backend/.data/edit` (back it up with the rest of `.data`).
+- Finished edits are served from `/api/edit/files/<random id>.mp4` without a login (the browser's video player cannot send one). The names cannot be guessed, but do not host this publicly without changing that.
+
 ## Instagram carousel (separate from the dashboard)
 - Topic: why unused Higgsfield credits do not roll over, and Elle built her own studio on the API.
 - Slide 1 is Elle's own finished graphic. Slides 2 to 7 were made in Studio with the copy written inside a dark holographic panel. Cost about $1.26 on top of earlier tests ($0.12 per new image, $0.09 per text edit).

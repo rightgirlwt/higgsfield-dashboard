@@ -1,5 +1,7 @@
 import dotenv from 'dotenv';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
 
 dotenv.config();
 
@@ -33,6 +35,11 @@ export const config = {
    */
   localCopies: bool(env.LOCAL_COPIES, nodeEnv !== 'test'),
   filesDir: env.FILES_DIR ?? './.data/files',
+
+  /** The Claude "effects" skill (45 video effects). Needs its own Python environment: see docs/HANDOFF.md. */
+  effectsDir: env.EFFECTS_DIR ?? path.join(os.homedir(), '.claude', 'skills', 'effects'),
+  /** Videos uploaded for editing, and the finished edits. */
+  editDir: env.EDIT_DIR ?? './.data/edit',
 
   /** `dev` = built-in seeded users (never allowed in production). `clerk` = verify Clerk session JWTs. */
   authProvider: (env.AUTH_PROVIDER ?? (isProd ? 'clerk' : 'dev')) as 'dev' | 'clerk',

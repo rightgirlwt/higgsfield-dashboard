@@ -18,6 +18,8 @@ import { search } from './routes/search';
 import { settings, team } from './routes/settings';
 import { studio } from './routes/studio';
 import { workflows } from './routes/workflows';
+import { edit } from './routes/edit';
+import { resultPath } from './services/effects';
 import { attachWorkspace, listWorkspaces } from './services/workspaces';
 
 export function createApp() {
@@ -59,6 +61,14 @@ export function createApp() {
     );
   }
 
+  // Finished edits are played by the browser's video player, which cannot send a login header. Each file is named
+  // by a random id that cannot be guessed. Supports seeking (Range requests).
+  api.get('/edit/files/:name', (req, res, next) => {
+    const file = resultPath(req.params.name);
+    if (!file) return next(new HttpError(404, 'Not found', 'not_found'));
+    res.sendFile(file, (err) => err && !res.headersSent && next(new HttpError(404, 'Not found', 'not_found')));
+  });
+
   // ---- authenticated ---------------------------------------------------------------------------
   api.use(authenticate, writesRequireUser, attachWorkspace);
   api.get('/me', (req, res) => res.json({ ...req.user, authProvider: config.authProvider }));
@@ -83,6 +93,7 @@ export function createApp() {
   api.use('/runs', runs);
   api.use('/media', media);
   api.use('/studio', studio);
+  api.use('/edit', edit);
   api.use('/projects', projects);
   api.use('/monitoring', monitoring);
   api.use('/settings', settings);
