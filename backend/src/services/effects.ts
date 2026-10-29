@@ -186,7 +186,7 @@ export async function listVideos(workspaceId: string, isDefaultWorkspace: boolea
     return [];
   }
   const all: EditVideo[] = [];
-  for (const n of names.filter((x) => x.endsWith('.json') && !x.endsWith('.words.json'))) {
+  for (const n of names.filter((x) => x.endsWith('.json') && !x.endsWith('.words.json') && !x.endsWith('.cuts.json'))) {
     try {
       all.push(JSON.parse(await fs.readFile(dir('videos', n), 'utf8')) as EditVideo);
     } catch {
@@ -261,6 +261,50 @@ export async function renameVideo(id: string, title: string): Promise<EditVideo>
 }
 
 export { captionsSchema };
+
+/** The transcript if it has already been made; never starts a transcription (the timeline asks for this on every open). */
+export async function getWordsIfAny(videoId: string): Promise<Word[]> {
+  const { file } = await videoFile(videoId);
+  try {
+    return JSON.parse(await fs.readFile(file.replace(/\.[^.]+$/, '.words.json'), 'utf8')) as Word[];
+  } catch {
+    return [];
+  }
+}
+
+/** Where the picture cuts to a different shot, found with ffmpeg's scene detection (free, runs here). Kept beside the video. */
+export async function getCuts(videoId: string): Promise<number[]> {
+  const { file } = await videoFile(videoId);
+  const cache = file.replace(/\.[^.]+$/, '.cuts.json');
+  try {
+    return JSON.parse(await fs.readFile(cache, 'utf8')) as number[];
+  } catch {
+    /* not detected yet */
+  }
+  const stderr = await new Promise<string>((resolve, reject) => {
+    const child = spawn('ffmpeg', ['-hide_banner', '-i', path.resolve(file), '-vf', "select='gt(scene,0.35)',showinfo", '-an', '-f', 'null', '-'], { windowsHide: true });
+    let err = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Timed out'));
+    }, 10 * 60_000);
+    child.stderr.on('data', (d: Buffer) => (err = (err + d.toString()).slice(-2_000_000)));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(err);
+      else reject(new Error(`ffmpeg exited with code ${code}`));
+    });
+  }).catch((e) => {
+    throw new HttpError(502, `Could not look for cuts: ${e instanceof Error ? e.message : String(e)}`, 'cuts_failed');
+  });
+  const cuts = [...stderr.matchAll(/pts_time:([0-9.]+)/g)].map((m) => Math.round(Number(m[1]) * 100) / 100).filter((t) => t > 0.2);
+  await fs.writeFile(cache, JSON.stringify(cuts));
+  return cuts;
+}
 export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema, captions: captionsSchema.optional() });
 
 export async function savePlan(id: string, plan: EditPlan): Promise<EditVideo> {

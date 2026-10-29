@@ -4,7 +4,7 @@ import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
 import { approveBeat, beatCounts, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, suggestBeats, updateBeat } from '../services/beats';
 import {
-  captionFonts, captionsSchema, DEFAULT_LABEL, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
+  captionFonts, captionsSchema, DEFAULT_LABEL, getCuts, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
 
 export const edit = Router();
@@ -84,6 +84,21 @@ edit.put(
   '/videos/:id/plan',
   wrap(async (req, res) => {
     res.json(await savePlan(req.params.id, planSchema.parse(req.body)));
+  }),
+);
+
+/** What the timeline shows besides the beats: where the shots cut, and where speech is (only once transcribed). */
+edit.get(
+  '/videos/:id/cuts',
+  wrap(async (req, res) => {
+    res.json(await getCuts(req.params.id));
+  }),
+);
+
+edit.get(
+  '/videos/:id/words',
+  wrap(async (req, res) => {
+    res.json(await getWordsIfAny(req.params.id));
   }),
 );
 

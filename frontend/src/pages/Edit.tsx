@@ -305,6 +305,8 @@ export default function Edit() {
           <>
           <BeatStrip beats={beatList} duration={duration} selectedId={beat?.id ?? ''} onSelect={setBeatId} onAdd={addBeat} canWrite={canWrite} videoId={videoId} onSuggested={beats.reload} />
 
+          <Timeline videoId={videoId} duration={duration} beats={beatList} steps={steps} capsOn={capsOn} selectedId={beat?.id ?? ''} onSelect={setBeatId} />
+
           <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
             <div className="space-y-6">
               <Card className="p-5">
@@ -473,6 +475,134 @@ export default function Edit() {
         </div>
       )}
     </div>
+  );
+}
+
+// Which timeline row an effect belongs on: camera moves, then colour and transition looks, and everything else is a title or card.
+const ZOOM_FX = new Set(['lean-in', 'slow-push', 'over-the-shoulder-zoom', 'locked-on']);
+const LOOK_FX = new Set(['moody', 'spotlight', 'swipe', 'uninstall', 'rabbit-hole', 'dot-reveal', 'pause-point']);
+const rowOf = (fx: string): 'zoom' | 'look' | 'cards' => (ZOOM_FX.has(fx) ? 'zoom' : LOOK_FX.has(fx) ? 'look' : 'cards');
+
+interface Bar {
+  key: string | number;
+  start: number;
+  end: number;
+  label: string;
+  className: string;
+  onClick?: () => void;
+}
+
+/** Bars that overlap in time go on separate lines so none hides another. */
+function lanes(bars: Bar[]): Bar[][] {
+  const out: Bar[][] = [];
+  for (const b of [...bars].sort((a, c) => a.start - c.start)) {
+    const lane = out.find((l) => l[l.length - 1].end <= b.start);
+    if (lane) lane.push(b);
+    else out.push([b]);
+  }
+  return out;
+}
+
+/** The whole video on one time axis: the beats, the effects by kind, where the shots cut, and where the captions run. */
+function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelect }: {
+  videoId: string; duration: number; beats: Beat[]; steps: Step[]; capsOn: boolean; selectedId: string; onSelect: (id: string) => void;
+}) {
+  const cuts = useApi<number[]>(`/edit/videos/${videoId}/cuts`);
+  const words = useApi<{ w: string; s: number; e: number }[]>(`/edit/videos/${videoId}/words`);
+  const reloadWords = words.reload;
+  useEffect(() => {
+    if (capsOn) reloadWords();
+  }, [capsOn, reloadWords]);
+
+  const total = Math.max(duration, 1);
+  const pct = (t: number) => `${Math.min(100, Math.max(0, (t / total) * 100))}%`;
+  const span = (a: number, b: number) => ({ left: pct(a), width: `${Math.max(0.6, ((Math.min(b, total) - a) / total) * 100)}%` });
+  const tick = total <= 20 ? 2 : total <= 60 ? 5 : total <= 180 ? 15 : 30;
+  const ticks = Array.from({ length: Math.floor(total / tick) + 1 }, (_, i) => i * tick);
+
+  const fxBars = (row: 'zoom' | 'look' | 'cards'): Bar[] =>
+    steps.filter((s) => rowOf(s.fx) === row).map((s) => ({ key: s.key, start: s.start, end: s.end, label: s.text ? `${s.fx}: ${s.text}` : s.fx, className: 'bg-cyan-500/30 border-cyan-500/60' }));
+  const beatBars: Bar[] = beats.map((b, i) => ({
+    key: b.id, start: b.startSec, end: b.endSec, label: `${i + 1} ${b.title || 'Untitled'}`, onClick: () => onSelect(b.id),
+    className: `${b.id === selectedId ? 'ring-1 ring-cyan-400 ' : ''}${b.status === 'approved' ? 'bg-emerald-500/30 border-emerald-500/60' : b.status === 'changes_needed' ? 'bg-amber-500/30 border-amber-500/60' : b.status === 'in_review' ? 'bg-cyan-500/30 border-cyan-500/60' : 'bg-slate-600/30 border-slate-500/60'}`,
+  }));
+  // Speech runs: words close together make one block, which is where captions appear
+  const speech: Bar[] = [];
+  for (const w of words.data ?? []) {
+    const last = speech[speech.length - 1];
+    if (last && w.s - last.end < 0.7) last.end = w.e;
+    else speech.push({ key: `s${w.s}`, start: w.s, end: w.e, label: '', className: 'bg-fuchsia-500/30 border-fuchsia-500/60' });
+  }
+
+  const rows: { name: string; note?: string; bars: Bar[]; empty?: string }[] = [
+    { name: 'Beats', bars: beatBars, empty: 'Add beats above' },
+    { name: 'Titles & Cards', bars: fxBars('cards'), empty: 'None yet' },
+    { name: 'Zoom', bars: fxBars('zoom'), empty: 'None yet' },
+    ...(steps.some((s) => rowOf(s.fx) === 'look') ? [{ name: 'Looks', bars: fxBars('look') }] : []),
+    {
+      name: 'Captions',
+      bars: capsOn ? speech.length ? speech : [{ key: 'all', start: 0, end: total, label: 'Follows the speech', className: 'bg-fuchsia-500/15 border-fuchsia-500/40' }] : [],
+      empty: 'Off',
+    },
+  ];
+
+  return (
+    <Card className="p-5">
+      <CardHeader eyebrow="Timeline" title="Everything on one line" />
+      <div className="overflow-x-auto">
+        <div className="min-w-[36rem]">
+          <div className="grid grid-cols-[7.5rem_1fr] gap-x-3 text-xs">
+            <div />
+            <div className="relative mb-1 h-4 text-slate-500" aria-hidden>
+              {ticks.map((t) => (
+                <span key={t} className="absolute -translate-x-1/2" style={{ left: pct(t) }}>{t}s</span>
+              ))}
+            </div>
+            {rows.map((r) => {
+              const laned = lanes(r.bars);
+              return (
+                <div key={r.name} className="contents">
+                  <div className="flex items-center py-1 text-slate-400">{r.name}</div>
+                  <div className="relative my-0.5 rounded-lg bg-slate-900/40" style={{ height: `${Math.max(1, laned.length) * 1.5 + 0.25}rem` }}>
+                    {r.bars.length === 0 && <span className="absolute inset-0 flex items-center pl-2 text-slate-600">{r.empty}</span>}
+                    {laned.map((lane, li) =>
+                      lane.map((b) => (
+                        <button
+                          key={b.key}
+                          type="button"
+                          title={`${b.label} (${clock(b.start)} to ${clock(b.end)})`}
+                          onClick={b.onClick}
+                          disabled={!b.onClick}
+                          style={{ ...span(b.start, b.end), top: `${li * 1.5 + 0.125}rem`, height: '1.25rem' }}
+                          className={`absolute overflow-hidden whitespace-nowrap rounded border px-1 text-left leading-5 ${b.className}`}
+                        >
+                          {b.label}
+                        </button>
+                      )),
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex items-center py-1 text-slate-400">Your cuts <span className="ml-1 text-slate-600">(detected)</span></div>
+            <div className="relative my-0.5 h-7 rounded-lg bg-slate-900/40">
+              {cuts.error ? (
+                <span className="absolute inset-0 flex items-center pl-2 text-slate-600">Could not look for cuts</span>
+              ) : !cuts.data ? (
+                <span className="absolute inset-0 flex items-center pl-2 text-slate-600">Looking for cuts…</span>
+              ) : cuts.data.length === 0 ? (
+                <span className="absolute inset-0 flex items-center pl-2 text-slate-600">One continuous shot</span>
+              ) : (
+                cuts.data.map((t) => (
+                  <span key={t} title={`Cut at ${clock(t)}`} className="absolute top-1 bottom-1 w-0.5 -translate-x-1/2 rounded bg-amber-400" style={{ left: pct(t) }} />
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">Click a beat to review it. Cuts are where the picture changes to a different shot, found automatically.</p>
+    </Card>
   );
 }
 
