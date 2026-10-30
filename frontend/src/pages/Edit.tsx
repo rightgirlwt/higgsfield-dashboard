@@ -135,6 +135,7 @@ export default function Edit() {
   const workspaces = useApi<WorkspaceList>('/workspaces');
   const fonts = useApi<{ family: string; source: 'team' | 'skill' }[]>('/edit/fonts');
   const [videoId, setVideoId] = useState('');
+  const [wordsVersion, setWordsVersion] = useState(0);
   const [search, setSearch] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -316,7 +317,9 @@ export default function Edit() {
           <>
           <BeatStrip beats={beatList} duration={duration} selectedId={beat?.id ?? ''} onSelect={setBeatId} onAdd={addBeat} canWrite={canWrite} videoId={videoId} onSuggested={beats.reload} />
 
-          <Timeline videoId={videoId} duration={duration} beats={beatList} steps={steps} capsOn={capsOn} selectedId={beat?.id ?? ''} onSelect={setBeatId} />
+          <Timeline videoId={videoId} duration={duration} beats={beatList} steps={steps} capsOn={capsOn} selectedId={beat?.id ?? ''} onSelect={setBeatId} wordsVersion={wordsVersion} />
+
+          <TranscriptEditor key={videoId} videoId={videoId} canWrite={canWrite} onSaved={() => setWordsVersion((v) => v + 1)} />
 
           <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
             <div className="space-y-6">
@@ -518,15 +521,15 @@ function lanes(bars: Bar[]): Bar[][] {
 }
 
 /** The whole video on one time axis: the beats, the effects by kind, where the shots cut, and where the captions run. */
-function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelect }: {
-  videoId: string; duration: number; beats: Beat[]; steps: Step[]; capsOn: boolean; selectedId: string; onSelect: (id: string) => void;
+function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelect, wordsVersion }: {
+  videoId: string; duration: number; beats: Beat[]; steps: Step[]; capsOn: boolean; selectedId: string; onSelect: (id: string) => void; wordsVersion: number;
 }) {
   const cuts = useApi<number[]>(`/edit/videos/${videoId}/cuts`);
-  const words = useApi<{ w: string; s: number; e: number }[]>(`/edit/videos/${videoId}/words`);
+  const words = useApi<{ words: { w: string; s: number; e: number }[] }>(`/edit/videos/${videoId}/words`);
   const reloadWords = words.reload;
   useEffect(() => {
-    if (capsOn) reloadWords();
-  }, [capsOn, reloadWords]);
+    if (capsOn || wordsVersion > 0) reloadWords();
+  }, [capsOn, wordsVersion, reloadWords]);
 
   const total = Math.max(duration, 1);
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / total) * 100))}%`;
@@ -542,7 +545,7 @@ function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelec
   }));
   // Speech runs: words close together make one block, which is where captions appear
   const speech: Bar[] = [];
-  for (const w of words.data ?? []) {
+  for (const w of words.data?.words ?? []) {
     const last = speech[speech.length - 1];
     if (last && w.s - last.end < 0.7) last.end = w.e;
     else speech.push({ key: `s${w.s}`, start: w.s, end: w.e, label: '', className: 'bg-fuchsia-500/30 border-fuchsia-500/60' });
@@ -705,6 +708,165 @@ function EditList({ videos, loading, canWrite, uploading, workspaceName, onOpen,
             );
           })}
         </ul>
+      )}
+    </Card>
+  );
+}
+
+interface TWord {
+  id: number;
+  w: string;
+  s: number;
+  e: number;
+}
+interface TranscriptData {
+  words: { w: string; s: number; e: number }[];
+  edited: boolean;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The spoken words, fixable by hand: the transcriber mishears names and legal terms, and the captions use this text. */
+function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; canWrite: boolean; onSaved: () => void }) {
+  const toast = useToast();
+  const data = useApi<TranscriptData>(`/edit/videos/${videoId}/words`);
+  const nextId = useRef(1);
+  const [words, setWords] = useState<TWord[]>([]);
+  const [saved, setSaved] = useState('');
+  const [edited, setEdited] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sel, setSel] = useState<number | null>(null);
+  const [find, setFind] = useState('');
+  const [swap, setSwap] = useState('');
+
+  function load(d: TranscriptData) {
+    const list = d.words.map((w) => ({ ...w, id: nextId.current++ }));
+    setWords(list);
+    setSaved(JSON.stringify(d.words));
+    setEdited(d.edited);
+    setSel(null);
+  }
+  useEffect(() => {
+    if (data.data) load(data.data);
+  }, [data.data]);
+
+  const plain = (list: TWord[]) => list.map(({ w, s, e }) => ({ w, s, e }));
+  const dirty = JSON.stringify(plain(words)) !== saved;
+
+  async function call(fn: () => Promise<TranscriptData>, ok?: string) {
+    setBusy(true);
+    try {
+      load(await fn());
+      onSaved();
+      if (ok) toast.success(ok);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const setText = (id: number, w: string) => setWords((p) => p.map((x) => (x.id === id ? { ...x, w } : x)));
+  const remove = (id: number) => { setWords((p) => p.filter((x) => x.id !== id)); setSel(null); };
+  function addAfter(id: number) {
+    const i = words.findIndex((x) => x.id === id);
+    const a = words[i];
+    const b = words[i + 1];
+    const end = b ? Math.max(a.e, Math.min(b.s, a.e + 0.4)) : a.e + 0.4;
+    const mid = (a.e + end) / 2;
+    const nid = nextId.current++;
+    setWords((p) => [...p.slice(0, i + 1), { id: nid, w: 'word', s: round2(a.e), e: round2(Math.max(end, mid + 0.05)) }, ...p.slice(i + 1)]);
+    setSel(nid);
+  }
+  function mergeNext(id: number) {
+    const i = words.findIndex((x) => x.id === id);
+    if (i < 0 || i === words.length - 1) return;
+    const a = words[i];
+    const b = words[i + 1];
+    setWords((p) => [...p.slice(0, i), { ...a, w: `${a.w}${b.w}`, e: b.e }, ...p.slice(i + 2)]);
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  const re = find.trim() ? new RegExp(`(^|[^\\p{L}\\p{N}'])(${escapeRe(find.trim())})(?=$|[^\\p{L}\\p{N}'])`, 'giu') : null;
+  const matches = re ? words.filter((x) => { re.lastIndex = 0; return re.test(x.w); }).length : 0;
+  function replaceAll() {
+    if (!re) return;
+    setWords((p) => p.map((x) => { re.lastIndex = 0; return re.test(x.w) ? { ...x, w: x.w.replace(re, (_m, pre: string) => `${pre}${swap}`) } : x; }));
+  }
+
+  // Lines: a new line after a pause or at the end of a sentence, with the time it starts
+  const lines: TWord[][] = [];
+  words.forEach((x, i) => {
+    const prev = words[i - 1];
+    if (!prev || x.s - prev.e > 0.8 || /[.?!]$/.test(prev.w) || lines[lines.length - 1].length >= 14) lines.push([]);
+    lines[lines.length - 1].push(x);
+  });
+
+  const none = data.data && data.data.words.length === 0 && !words.length;
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <CardHeader eyebrow="Captions use this text" title="Transcript" />
+        <Button onClick={() => setOpen((o) => !o)}>{open ? 'Hide' : 'Open the transcript'}</Button>
+      </div>
+      {!open ? (
+        <p className="text-sm text-slate-400">The words the transcriber heard. Fix a name or a legal term here and the captions will spell it your way.{edited ? ' This transcript has been corrected by hand.' : ''}</p>
+      ) : data.error ? (
+        <ErrorState message={data.error} onRetry={data.reload} />
+      ) : !data.data ? (
+        <Skeleton className="h-24" />
+      ) : none ? (
+        <div className="space-y-2 text-sm text-slate-300">
+          <p>This video has not been listened to yet. It runs on this computer and is free; the first time takes about a minute.</p>
+          <Button variant="primary" loading={busy} disabled={!canWrite} onClick={() => void call(() => api.post<TranscriptData>(`/edit/videos/${videoId}/transcribe`, {}))}>Listen to the video</Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end">
+            <Field label="Find" htmlFor="tr-find"><Input id="tr-find" value={find} placeholder="for example Green" onChange={(e) => setFind(e.target.value)} /></Field>
+            <Field label="Replace with" htmlFor="tr-swap"><Input id="tr-swap" value={swap} placeholder="for example Greene" disabled={!canWrite} onChange={(e) => setSwap(e.target.value)} /></Field>
+            <Button disabled={!canWrite || matches === 0} onClick={replaceAll}>Replace {matches ? `${matches} ` : ''}{matches === 1 ? 'word' : 'words'}</Button>
+            <span className="text-xs text-slate-500">{find.trim() ? `${matches} found` : ''}</span>
+          </div>
+
+          <div className="max-h-[26rem] space-y-2 overflow-auto rounded-xl border border-slate-800 p-3">
+            {lines.map((line) => (
+              <div key={line[0].id} className="flex flex-wrap items-center gap-1.5">
+                <span className="w-12 shrink-0 text-xs tabular-nums text-slate-500">{clock(line[0].s)}</span>
+                {line.map((x) => (
+                  <input
+                    key={x.id}
+                    aria-label={`Word at ${clock(x.s)}`}
+                    value={x.w}
+                    size={Math.max(2, x.w.length)}
+                    disabled={!canWrite}
+                    onFocus={() => setSel(x.id)}
+                    onChange={(e) => setText(x.id, e.target.value)}
+                    className={`rounded-md border bg-transparent px-1.5 py-0.5 text-sm ${sel === x.id ? 'border-cyan-500' : 'border-slate-800'} ${re && ((re.lastIndex = 0), re.test(x.w)) ? 'bg-amber-500/20' : ''}`}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+
+          {sel !== null && canWrite && words.some((x) => x.id === sel) && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <span>Selected word:</span>
+              <Button size="sm" onClick={() => addAfter(sel)}>Add a word after</Button>
+              <Button size="sm" onClick={() => mergeNext(sel)}>Join with the next word</Button>
+              <Button size="sm" onClick={() => remove(sel)}><Trash2 className="h-4 w-4 text-rose-300" aria-hidden /> Delete</Button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="primary" loading={busy} disabled={!canWrite || !dirty} onClick={() => void call(() => api.put<TranscriptData>(`/edit/videos/${videoId}/words`, { words: plain(words) }), 'Transcript saved')}>Save the transcript</Button>
+            <Button disabled={!dirty || busy} onClick={() => data.data && load(data.data)}>Discard changes</Button>
+            {edited && <Button disabled={!canWrite || busy} onClick={() => void call(() => api.post<TranscriptData>(`/edit/videos/${videoId}/words/reset`, {}), 'Back to what the transcriber heard')}>Back to the original</Button>}
+            <span className="text-xs text-slate-500">{dirty ? 'Unsaved changes. ' : ''}Timing stays as spoken. Drafts already rendered keep their old captions; render again to use the new text.</span>
+          </div>
+        </div>
       )}
     </Card>
   );

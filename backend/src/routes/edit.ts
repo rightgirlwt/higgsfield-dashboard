@@ -4,8 +4,10 @@ import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
 import { approveBeat, beatCounts, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, suggestBeats, updateBeat } from '../services/beats';
 import {
-  approveVideoDraft, captionFonts, captionsSchema, DEFAULT_LABEL, requestVideoDraftChanges, submitVideoDraft, getCuts, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
+  approveVideoDraft, captionFonts, captionsSchema, DEFAULT_LABEL, getWords, requestVideoDraftChanges, resetWords, saveWords, submitVideoDraft, wordsEdited, getCuts, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
+
+import { wordsSchema } from '../services/transcript';
 
 export const edit = Router();
 
@@ -126,7 +128,32 @@ edit.get(
 edit.get(
   '/videos/:id/words',
   wrap(async (req, res) => {
-    res.json(await getWordsIfAny(req.params.id));
+    res.json({ words: await getWordsIfAny(req.params.id), edited: await wordsEdited(req.params.id) });
+  }),
+);
+
+/** Listen to the video on this computer (free). The first time takes about a minute. */
+edit.post(
+  '/videos/:id/transcribe',
+  wrap(async (req, res) => {
+    const words = await getWords(req.params.id);
+    res.json({ words, edited: await wordsEdited(req.params.id) });
+  }),
+);
+
+/** The corrected transcript. Captions and Suggest beats read it from here on. */
+edit.put(
+  '/videos/:id/words',
+  wrap(async (req, res) => {
+    const words = await saveWords(req.params.id, wordsSchema.parse(req.body?.words));
+    res.json({ words, edited: true });
+  }),
+);
+
+edit.post(
+  '/videos/:id/words/reset',
+  wrap(async (req, res) => {
+    res.json({ words: await resetWords(req.params.id), edited: false });
   }),
 );
 

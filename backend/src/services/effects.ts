@@ -11,6 +11,7 @@ import { logger } from '../logger';
 import { buildAss, type Captions, captionsSchema, DEFAULT_CAPTIONS, styleSchema } from './captions';
 import { approveDraft, describeChanges, type Draft, nextNumber, requestDraftChanges, submitDraft } from './drafts';
 import { listFonts } from './fonts';
+import { cleanWords, type EditedWord } from './transcript';
 
 /**
  * Video effects from the Claude "effects" skill (45 of them), run on this computer. Nothing here calls a paid service:
@@ -189,7 +190,7 @@ export async function listVideos(workspaceId: string, isDefaultWorkspace: boolea
     return [];
   }
   const all: EditVideo[] = [];
-  for (const n of names.filter((x) => x.endsWith('.json') && !x.endsWith('.words.json') && !x.endsWith('.cuts.json'))) {
+  for (const n of names.filter((x) => /^[0-9a-f-]{36}\.json$/.test(x))) {
     try {
       all.push(JSON.parse(await fs.readFile(dir('videos', n), 'utf8')) as EditVideo);
     } catch {
@@ -272,6 +273,49 @@ export async function getWordsIfAny(videoId: string): Promise<Word[]> {
     return JSON.parse(await fs.readFile(file.replace(/\.[^.]+$/, '.words.json'), 'utf8')) as Word[];
   } catch {
     return [];
+  }
+}
+
+/** Save the transcript as the team corrected it. The machine's version is kept once, so it can be restored. */
+export async function saveWords(videoId: string, words: EditedWord[]): Promise<Word[]> {
+  const { file } = await videoFile(videoId);
+  const out = file.replace(/\.[^.]+$/, '.words.json');
+  const original = file.replace(/\.[^.]+$/, '.words.original.json');
+  const clean = cleanWords(words);
+  try {
+    await fs.access(original);
+  } catch {
+    try {
+      await fs.copyFile(out, original);
+    } catch {
+      throw badRequest('This video has not been transcribed yet.');
+    }
+  }
+  await fs.writeFile(out, JSON.stringify(clean));
+  return clean;
+}
+
+/** Throw away the corrections and go back to what the transcriber heard. */
+export async function resetWords(videoId: string): Promise<Word[]> {
+  const { file } = await videoFile(videoId);
+  const out = file.replace(/\.[^.]+$/, '.words.json');
+  const original = file.replace(/\.[^.]+$/, '.words.original.json');
+  try {
+    await fs.copyFile(original, out);
+  } catch {
+    /* never edited: the current transcript is the original */
+  }
+  return getWordsIfAny(videoId);
+}
+
+/** Whether the transcript has been corrected by hand (so the page can offer to restore it). */
+export async function wordsEdited(videoId: string): Promise<boolean> {
+  const { file } = await videoFile(videoId);
+  try {
+    await fs.access(file.replace(/\.[^.]+$/, '.words.original.json'));
+    return true;
+  } catch {
+    return false;
   }
 }
 
