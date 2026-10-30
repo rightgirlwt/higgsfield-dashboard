@@ -20,7 +20,9 @@ import { studio } from './routes/studio';
 import { workflows } from './routes/workflows';
 import { edit } from './routes/edit';
 import { resultPath, sourcePath } from './services/effects';
-import { sourceLinkValid } from './services/sourceLinks';
+import { sourceLinkValid, vaultLinkValid } from './services/sourceLinks';
+import { clipFile } from './services/vault';
+import { vault } from './routes/vault';
 import { attachWorkspace, listWorkspaces } from './services/workspaces';
 
 export function createApp() {
@@ -80,6 +82,16 @@ export function createApp() {
     }),
   );
 
+  // A Content Vault clip, played in the Vault. Same idea: a signed link from /vault/clips/:id/stream-url.
+  api.get(
+    '/vault/clip/:id',
+    wrap(async (req, res, next) => {
+      if (!vaultLinkValid(req.params.id, req.query.exp, req.query.sig)) return next(new HttpError(403, 'This link has expired. Reload the page.', 'forbidden'));
+      const file = await clipFile(req.params.id);
+      res.sendFile(file, { dotfiles: 'allow' }, (err) => err && !res.headersSent && next(new HttpError(404, 'Not found', 'not_found')));
+    }),
+  );
+
   // ---- authenticated ---------------------------------------------------------------------------
   api.use(authenticate, writesRequireUser, attachWorkspace);
   api.get('/me', (req, res) => res.json({ ...req.user, authProvider: config.authProvider }));
@@ -105,6 +117,7 @@ export function createApp() {
   api.use('/media', media);
   api.use('/studio', studio);
   api.use('/edit', edit);
+  api.use('/vault', vault);
   api.use('/projects', projects);
   api.use('/monitoring', monitoring);
   api.use('/settings', settings);

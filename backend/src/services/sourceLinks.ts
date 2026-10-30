@@ -15,6 +15,16 @@ export function signSourceLink(id: string, now = Date.now()): string {
   return `/api/edit/source/${id}?exp=${exp}&sig=${sign(id, exp)}`;
 }
 
+/** The same idea for a Content Vault clip. The signature covers a "vault:" prefix, so a link for one kind never opens the other. */
+export function signVaultLink(id: string, now = Date.now()): string {
+  const exp = now + TTL_MS;
+  return `/api/vault/clip/${id}?exp=${exp}&sig=${sign(`vault:${id}`, exp)}`;
+}
+
+export function vaultLinkValid(id: string, exp: unknown, sig: unknown, now = Date.now()): boolean {
+  return sourceLinkValid(`vault:${id}`, exp, sig, now);
+}
+
 export function sourceLinkValid(id: string, exp: unknown, sig: unknown, now = Date.now()): boolean {
   const e = Number(exp);
   if (!Number.isFinite(e) || e < now || typeof sig !== 'string') return false;

@@ -316,6 +316,55 @@ CREATE TABLE video_beats (
 CREATE INDEX video_beats_video_idx ON video_beats(video_id, position, start_sec);
 `,
   },
+  {
+    version: 6,
+    name: 'content_vault',
+    // The Content Vault: raw footage (a folder on this computer, or uploaded), sorted into folders, grouped by the day it was filmed,
+    // plus the reel ideas planned from it. A clip found twice points at the first one (duplicate_of) instead of being counted again.
+    sql: `
+CREATE TABLE vault_clips (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  name text NOT NULL,
+  path text NOT NULL,
+  source text NOT NULL CHECK (source IN ('folder','upload')),
+  size_bytes bigint NOT NULL DEFAULT 0,
+  duration_sec double precision,
+  width integer,
+  height integer,
+  shot_at timestamptz NOT NULL,
+  shot_date date NOT NULL,
+  audio_db double precision,
+  fingerprint text NOT NULL DEFAULT '',
+  duplicate_of uuid REFERENCES vault_clips(id) ON DELETE SET NULL,
+  folder text NOT NULL DEFAULT '',
+  tags text[] NOT NULL DEFAULT '{}',
+  description text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'new' CHECK (status IN ('new','sorted')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX vault_clips_day_idx ON vault_clips(org_id, shot_date DESC, shot_at);
+CREATE INDEX vault_clips_path_idx ON vault_clips(org_id, path);
+CREATE INDEX vault_clips_fingerprint_idx ON vault_clips(org_id, fingerprint);
+
+CREATE TABLE vault_reels (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  title text NOT NULL,
+  style text NOT NULL CHECK (style IN ('vlog','topic')),
+  day date,
+  hook text NOT NULL DEFAULT '',
+  beats jsonb NOT NULL DEFAULT '[]'::jsonb,
+  caption text NOT NULL DEFAULT '',
+  why text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'idea' CHECK (status IN ('idea','saved','used')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX vault_reels_idx ON vault_reels(org_id, created_at DESC);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

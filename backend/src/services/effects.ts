@@ -49,7 +49,7 @@ interface RunResult {
   stderr: string;
 }
 
-function run(cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number }): Promise<RunResult> {
+export function run(cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number }): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true });
     const out: Buffer[] = [];

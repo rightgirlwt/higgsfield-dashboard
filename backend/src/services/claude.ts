@@ -10,6 +10,8 @@ export interface PromptParams {
   user: string;
   temperature?: number | null;
   maxTokens: number;
+  /** Pictures shown to the model before the text (JPEG, base64). */
+  images?: { data: string }[];
 }
 
 export interface PromptResult {
@@ -42,7 +44,14 @@ export async function runPrompt(orgId: string, p: PromptParams): Promise<PromptR
     ...(p.system?.trim() ? { system: p.system } : {}),
     // Current-generation models reject non-default sampling params, so only send it where supported.
     ...(model.supportsTemperature && typeof p.temperature === 'number' ? { temperature: Math.min(1, Math.max(0, p.temperature)) } : {}),
-    messages: [{ role: 'user', content: p.user }],
+    messages: [
+      {
+        role: 'user',
+        content: p.images?.length
+          ? [...p.images.map((i) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/jpeg' as const, data: i.data } })), { type: 'text' as const, text: p.user }]
+          : p.user,
+      },
+    ],
   });
   const latencyMs = Date.now() - started;
   if (res.stop_reason === 'refusal') {
