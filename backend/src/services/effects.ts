@@ -222,6 +222,11 @@ async function videoFile(id: string): Promise<{ file: string; record: EditVideo 
   throw notFound('Video not found');
 }
 
+/** Absolute path of an uploaded source video, for playback. */
+export async function sourcePath(id: string): Promise<string> {
+  return path.resolve((await videoFile(id)).file);
+}
+
 export async function getVideo(id: string): Promise<EditVideo> {
   return (await videoFile(id)).record;
 }

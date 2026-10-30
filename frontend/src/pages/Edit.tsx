@@ -739,6 +739,23 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
   const [sel, setSel] = useState<number | null>(null);
   const [find, setFind] = useState('');
   const [swap, setSwap] = useState('');
+  const player = useRef<HTMLVideoElement>(null);
+  const [src, setSrc] = useState('');
+  const [srcError, setSrcError] = useState('');
+  const [now, setNow] = useState(-1);
+
+  // The player gets a link that expires, so ask for one each time the transcript is opened
+  useEffect(() => {
+    if (!open) return;
+    api.get<{ url: string }>(`/edit/videos/${videoId}/stream-url`).then((r) => setSrc(r.url)).catch((e) => setSrcError(errorMessage(e)));
+  }, [open, videoId]);
+
+  function seek(t: number, play: boolean) {
+    const v = player.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, t - 0.05);
+    if (play) void v.play().catch(() => undefined);
+  }
 
   function load(d: TranscriptData) {
     const list = d.words.map((w) => ({ ...w, id: nextId.current++ }));
@@ -823,6 +840,7 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
           <Button variant="primary" loading={busy} disabled={!canWrite} onClick={() => void call(() => api.post<TranscriptData>(`/edit/videos/${videoId}/transcribe`, {}))}>Listen to the video</Button>
         </div>
       ) : (
+        <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
         <div className="space-y-4">
           <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end">
             <Field label="Find" htmlFor="tr-find"><Input id="tr-find" value={find} placeholder="for example Green" onChange={(e) => setFind(e.target.value)} /></Field>
@@ -834,7 +852,9 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
           <div className="max-h-[26rem] space-y-2 overflow-auto rounded-xl border border-slate-800 p-3">
             {lines.map((line) => (
               <div key={line[0].id} className="flex flex-wrap items-center gap-1.5">
-                <span className="w-12 shrink-0 text-xs tabular-nums text-slate-500">{clock(line[0].s)}</span>
+                <button type="button" aria-label={`Play from ${clock(line[0].s)}`} title="Play from here" onClick={() => seek(line[0].s, true)} className="flex w-14 shrink-0 items-center gap-1 text-xs tabular-nums text-slate-500 hover:text-cyan-300">
+                  <Play className="h-3 w-3" aria-hidden /> {clock(line[0].s)}
+                </button>
                 {line.map((x) => (
                   <input
                     key={x.id}
@@ -842,9 +862,9 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
                     value={x.w}
                     size={Math.max(2, x.w.length)}
                     disabled={!canWrite}
-                    onFocus={() => setSel(x.id)}
+                    onFocus={() => { setSel(x.id); seek(x.s, false); }}
                     onChange={(e) => setText(x.id, e.target.value)}
-                    className={`rounded-md border bg-transparent px-1.5 py-0.5 text-sm ${sel === x.id ? 'border-cyan-500' : 'border-slate-800'} ${re && ((re.lastIndex = 0), re.test(x.w)) ? 'bg-amber-500/20' : ''}`}
+                    className={`rounded-md border bg-transparent px-1.5 py-0.5 text-sm ${sel === x.id ? 'border-cyan-500' : 'border-slate-800'} ${now >= x.s && now < x.e ? 'bg-cyan-500/25' : re && ((re.lastIndex = 0), re.test(x.w)) ? 'bg-amber-500/20' : ''}`}
                   />
                 ))}
               </div>
@@ -866,6 +886,15 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
             {edited && <Button disabled={!canWrite || busy} onClick={() => void call(() => api.post<TranscriptData>(`/edit/videos/${videoId}/words/reset`, {}), 'Back to what the transcriber heard')}>Back to the original</Button>}
             <span className="text-xs text-slate-500">{dirty ? 'Unsaved changes. ' : ''}Timing stays as spoken. Drafts already rendered keep their old captions; render again to use the new text.</span>
           </div>
+        </div>
+        <aside className="lg:sticky lg:top-4 lg:self-start">
+          {src ? (
+            <video ref={player} controls src={src} onTimeUpdate={(e) => setNow(e.currentTarget.currentTime)} onSeeked={(e) => setNow(e.currentTarget.currentTime)} className="w-full rounded-xl border border-slate-800 bg-black" />
+          ) : (
+            <p className="rounded-xl border border-slate-800 p-3 text-xs text-slate-500">{srcError || 'Loading the video'}</p>
+          )}
+          <p className="mt-2 text-xs text-slate-500">Click a time to play from there. Clicking a word jumps the video to it, and the word being said lights up as it plays.</p>
+        </aside>
         </div>
       )}
     </Card>

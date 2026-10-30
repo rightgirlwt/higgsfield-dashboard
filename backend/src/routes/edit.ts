@@ -4,9 +4,10 @@ import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
 import { approveBeat, beatCounts, beatCreate, beatPatch, createBeat, deleteBeat, listBeats, requestChanges, setAdjustmentDone, submitBeat, suggestBeats, updateBeat } from '../services/beats';
 import {
-  approveVideoDraft, captionFonts, captionsSchema, DEFAULT_LABEL, getWords, requestVideoDraftChanges, resetWords, saveWords, submitVideoDraft, wordsEdited, getCuts, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
+  approveVideoDraft, captionFonts, captionsSchema, DEFAULT_LABEL, getWords, requestVideoDraftChanges, resetWords, saveWords, submitVideoDraft, wordsEdited, getCuts, getVideo, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
 
+import { signSourceLink } from '../services/sourceLinks';
 import { wordsSchema } from '../services/transcript';
 
 export const edit = Router();
@@ -154,6 +155,15 @@ edit.post(
   '/videos/:id/words/reset',
   wrap(async (req, res) => {
     res.json({ words: await resetWords(req.params.id), edited: false });
+  }),
+);
+
+/** A link the video player can use for this uploaded video (it expires). */
+edit.get(
+  '/videos/:id/stream-url',
+  wrap(async (req, res) => {
+    await getVideo(req.params.id); // 404 for an unknown video
+    res.json({ url: signSourceLink(req.params.id) });
   }),
 );
 
