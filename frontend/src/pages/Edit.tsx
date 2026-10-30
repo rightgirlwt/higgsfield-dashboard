@@ -377,7 +377,7 @@ export default function Edit() {
                   <span>
                     Add captions
                     <span className="block text-xs text-slate-500">
-                      The words appear as they are spoken, a few at a time, with the word being said in yellow. The first time, the video is transcribed on this computer (free, about a minute).
+                      The words appear as they are spoken, a few at a time, with the word being said picked out in your highlight colour. The first time, the video is transcribed on this computer (free, about a minute).
                     </span>
                   </span>
                 </label>
@@ -871,14 +871,19 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
             ))}
           </div>
 
-          {sel !== null && canWrite && words.some((x) => x.id === sel) && (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-              <span>Selected word:</span>
-              <Button size="sm" onClick={() => addAfter(sel)}>Add a word after</Button>
-              <Button size="sm" onClick={() => mergeNext(sel)}>Join with the next word</Button>
-              <Button size="sm" onClick={() => remove(sel)}><Trash2 className="h-4 w-4 text-rose-300" aria-hidden /> Delete</Button>
-            </div>
-          )}
+          {/* Always takes its space, so the buttons below do not jump down when a word is selected */}
+          <div className="flex min-h-9 flex-wrap items-center gap-2 text-xs text-slate-400">
+            {sel !== null && canWrite && words.some((x) => x.id === sel) ? (
+              <>
+                <span>Selected word:</span>
+                <Button size="sm" onClick={() => addAfter(sel)}>Add a word after</Button>
+                <Button size="sm" onClick={() => mergeNext(sel)}>Join with the next word</Button>
+                <Button size="sm" onClick={() => remove(sel)}><Trash2 className="h-4 w-4 text-rose-300" aria-hidden /> Delete</Button>
+              </>
+            ) : (
+              <span>Click a word to fix it, add a word after it, join it with the next, or delete it.</span>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="primary" loading={busy} disabled={!canWrite || !dirty} onClick={() => void call(() => api.put<TranscriptData>(`/edit/videos/${videoId}/words`, { words: plain(words) }), 'Transcript saved')}>Save the transcript</Button>
