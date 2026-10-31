@@ -8,7 +8,7 @@ import { badRequest, notFound } from '../lib/errors';
 import { calcCostUsd, estimateTokens } from '../lib/pricing';
 import { logger } from '../logger';
 import { runPrompt } from './claude';
-import { run } from './effects';
+import { run } from './exec';
 import { getSecret } from './secrets';
 import { recordUsage } from './usage';
 import { inWorkspace, type Workspace } from './workspaces';
@@ -146,11 +146,15 @@ export function parseReels(text: string, catalog: CatalogClip[]): ReelIdea[] {
 
 // ---- reading a clip (free, local) -----------------------------------------------------------------------
 
-interface Probe {
+export interface Probe {
   durationSec: number | null;
   width: number | null;
   height: number | null;
   shot: { at: Date; day: string } | null;
+}
+
+export async function probeFile(file: string): Promise<Probe> {
+  return probe(file);
 }
 
 async function probe(file: string): Promise<Probe> {
@@ -461,6 +465,8 @@ const mapClip = (c: ClipRow, thumb: string) => ({
 });
 
 export interface ClipFilter {
+  /** Only these clips (used by the editor to show the B-roll it has placed). */
+  ids?: string[];
   folder?: string;
   day?: string;
   q?: string;
@@ -477,6 +483,7 @@ export async function listClips(orgId: string, ws: Workspace, f: ClipFilter) {
   const params: unknown[] = [orgId];
   const where = ['c.org_id=$1', inWorkspace(ws, 'c', params)];
   const add = (sql: string, v: unknown) => (params.push(v), where.push(sql.replace('?', `$${params.length}`)));
+  if (f.ids) add('c.id = ANY(?::uuid[])', f.ids.filter((i) => /^[0-9a-f-]{36}$/i.test(i)).slice(0, 100));
   if (f.folder) add('c.folder = ?', f.folder);
   if (f.day && /^\d{4}-\d{2}-\d{2}$/.test(f.day)) add('c.shot_date = ?::date', f.day);
   if (f.unsorted) where.push("c.status = 'new'");
@@ -598,7 +605,8 @@ const REEL_SYSTEM = (voice: string, count: number) =>
 
 const voiceFor = (ws: Workspace) => (/greene|glg/i.test(ws.name) ? VOICES.glg : VOICES.rgm);
 
-async function catalogFor(orgId: string, ws: Workspace, day?: string) {
+/** The sorted clips as lines Claude can read (c1, c2, ...), grouped by the day they were filmed, newest first. */
+export async function catalogFor(orgId: string, ws: Workspace, day?: string) {
   const params: unknown[] = [orgId];
   const where = ['c.org_id=$1', inWorkspace(ws, 'c', params), "c.status='sorted'", 'c.duplicate_of IS NULL'];
   if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -606,12 +614,12 @@ async function catalogFor(orgId: string, ws: Workspace, day?: string) {
     where.push(`c.shot_date = $${params.length}::date`);
   }
   const { rows } = await getDb().query<ClipRow>(`SELECT c.*, c.shot_date::text AS shot_date FROM vault_clips c WHERE ${where.join(' AND ')} ORDER BY c.shot_date DESC, c.shot_at LIMIT ${REEL_MAX_CLIPS}`, params);
-  const catalog: CatalogClip[] = [];
+  const catalog: (CatalogClip & { folder: string })[] = [];
   const lines: string[] = [];
   let currentDay = '';
   for (const c of rows) {
     const key = `c${catalog.length + 1}`;
-    catalog.push({ key, id: c.id, durationSec: c.duration_sec });
+    catalog.push({ key, id: c.id, durationSec: c.duration_sec, folder: c.folder });
     if (c.shot_date !== currentDay) {
       currentDay = c.shot_date;
       const count = rows.filter((r) => r.shot_date === currentDay).length;

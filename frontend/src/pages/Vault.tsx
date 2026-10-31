@@ -1,5 +1,6 @@
-﻿import { Calendar, Copy, FolderOpen, Layers, Search, Sparkles, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
+import { Calendar, Copy, Film, FolderOpen, Layers, Search, Sparkles, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useCan } from '../auth/context';
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, Modal, PageHeader, ProgressBar, Select, Skeleton, Tabs } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
@@ -586,6 +587,7 @@ function DaysList({ days, error, onClips, onReels }: { days: Day[] | null; error
 function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, reload, onOpenClip }: { reels: Reel[] | null; days: Day[]; canWrite: boolean; planDay: string; setPlanDay: (d: string) => void; unsorted: number; sorted: number; reload: () => void; onOpenClip: (c: Clip) => void }) {
   const toast = useToast();
   const [count, setCount] = useState(5);
+  const [sending, setSending] = useState<Reel | null>(null);
   const [quote, setQuote] = useState<ReelQuote | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -667,6 +669,7 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
           )}
         </Card>
       )}
+      <SendToEdit reel={sending} onClose={() => setSending(null)} />
       {!reels ? (
         <Skeleton className="h-40" />
       ) : reels.length === 0 ? (
@@ -685,6 +688,7 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
               </div>
               {canWrite && (
                 <div className="flex gap-2">
+                  <Button size="sm" onClick={() => setSending(r)}><Film className="h-3.5 w-3.5" aria-hidden /> Use as B-roll in an edit</Button>
                   {r.status !== 'saved' && <Button size="sm" onClick={() => void status(r, 'saved')}>Save</Button>}
                   {r.status !== 'used' && <Button size="sm" onClick={() => void status(r, 'used')}>Mark used</Button>}
                   <Button size="sm" variant="ghost" onClick={() => void remove(r)} aria-label={`Delete ${r.title}`}><Trash2 className="h-3.5 w-3.5" aria-hidden /></Button>
@@ -723,6 +727,51 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
         ))
       )}
     </section>
+  );
+}
+
+/** Lays a reel's clips over one of the videos on the Editing page, then opens that edit. */
+function SendToEdit({ reel, onClose }: { reel: Reel | null; onClose: () => void }) {
+  const toast = useToast();
+  const navigate = useNavigate();
+  const videos = useApi<{ id: string; name: string; title?: string; durationSec: number | null; beats: { total: number } }[]>(reel ? '/edit/videos' : null);
+  const [busy, setBusy] = useState('');
+  async function send(videoId: string) {
+    if (!reel) return;
+    setBusy(videoId);
+    try {
+      const r = await api.post<{ placed: number }>(`/vault/reels/${reel.id}/to-edit`, { videoId });
+      toast.success(`${r.placed} clip${r.placed === 1 ? '' : 's'} placed as B-roll. Check them, then render.`);
+      onClose();
+      navigate(`/edit?video=${videoId}`);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    setBusy('');
+  }
+  return (
+    <Modal open={!!reel} onClose={onClose} title="Use this reel's clips as B-roll">
+      <p className="text-sm text-slate-400">Pick the video they go over. The clips are spread across its beats (or evenly along it if it has none), replacing any B-roll already on it. You can move or remove each one on the Editing page.</p>
+      {videos.error ? (
+        <p className="mt-3 text-sm text-rose-300">{videos.error}</p>
+      ) : !videos.data ? (
+        <Skeleton className="mt-3 h-24" />
+      ) : videos.data.filter((v) => v.durationSec).length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">There is no video on the Editing page yet. Upload the one you recorded there first.</p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {videos.data.filter((v) => v.durationSec).map((v) => (
+            <li key={v.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 p-2.5">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{v.title || v.name}</div>
+                <div className="text-xs text-slate-500">{Math.round(v.durationSec ?? 0)}s · {v.beats.total} beat{v.beats.total === 1 ? '' : 's'}</div>
+              </div>
+              <Button size="sm" variant="primary" loading={busy === v.id} disabled={!!busy} onClick={() => void send(v.id)}>Use this video</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
   );
 }
 

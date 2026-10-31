@@ -7,6 +7,8 @@ import {
   approveVideoDraft, captionFonts, captionsSchema, DEFAULT_LABEL, getWords, requestVideoDraftChanges, resetWords, saveWords, submitVideoDraft, wordsEdited, getCuts, getVideo, getWordsIfAny, EDIT_UPLOAD_TYPES, engineStatus, getJob, labelSchema, listEffects, listVideos, MAX_UPLOAD_BYTES, planSchema, previewFrame, renameVideo, saveUpload, savePlan, startRender, stepSchema,
 } from '../services/effects';
 
+import { brollSchema, MAX_CUTAWAYS } from '../services/broll';
+import { suggestBroll } from '../services/brollPlan';
 import { signSourceLink } from '../services/sourceLinks';
 import { wordsSchema } from '../services/transcript';
 
@@ -71,13 +73,13 @@ edit.post(
   }),
 );
 
-const renderBody = z.object({ videoId: z.string().uuid(), steps: z.array(stepSchema).max(12).default([]), label: labelSchema.default(noLabel), captions: captionsSchema.optional() });
+const renderBody = z.object({ videoId: z.string().uuid(), steps: z.array(stepSchema).max(12).default([]), label: labelSchema.default(noLabel), captions: captionsSchema.optional(), broll: z.array(brollSchema).max(MAX_CUTAWAYS).default([]) });
 
 edit.post(
   '/render',
   wrap(async (req, res) => {
     const b = renderBody.parse(req.body);
-    const job = await startRender({ orgId: req.user!.orgId, workspaceId: req.workspace!.id, videoId: b.videoId, steps: b.steps, label: b.label, captions: b.captions, createdBy: req.user!.name });
+    const job = await startRender({ orgId: req.user!.orgId, workspaceId: req.workspace!.id, videoId: b.videoId, steps: b.steps, label: b.label, captions: b.captions, broll: b.broll, createdBy: req.user!.name });
     res.status(202).json(job);
   }),
 );
@@ -155,6 +157,14 @@ edit.post(
   '/videos/:id/words/reset',
   wrap(async (req, res) => {
     res.json({ words: await resetWords(req.params.id), edited: false });
+  }),
+);
+
+/** Haiku matches this video's beats to clips in the Vault. Returns picks for the page to lay on the timeline; nothing is saved here. */
+edit.post(
+  '/videos/:id/broll/suggest',
+  wrap(async (req, res) => {
+    res.json(await suggestBroll(req.user!.orgId, req.workspace!, req.params.id));
   }),
 );
 

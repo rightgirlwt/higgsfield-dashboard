@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import { run } from './exec';
+import { brollSchema, checkCutaways, composeBroll, type Cutaway, MAX_CUTAWAYS } from './broll';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -42,34 +44,6 @@ export async function engineStatus(): Promise<{ ready: boolean; message: string 
     }
   }
   return { ready: true, message: 'Ready' };
-}
-
-interface RunResult {
-  stdout: Buffer;
-  stderr: string;
-}
-
-export function run(cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number }): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true });
-    const out: Buffer[] = [];
-    let err = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error('Timed out'));
-    }, opts.timeoutMs);
-    child.stdout.on('data', (d: Buffer) => out.push(d));
-    child.stderr.on('data', (d: Buffer) => (err = (err + d.toString()).slice(-4000)));
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve({ stdout: Buffer.concat(out), stderr: err });
-      else reject(new Error(err.trim().split('\n').slice(-3).join(' ') || `Exited with code ${code}`));
-    });
-  });
 }
 
 let catalog: EffectInfo[] | null = null;
@@ -128,6 +102,8 @@ export interface EditPlan {
   steps: Step[];
   label: Label;
   captions?: Captions;
+  /** Clips from the Content Vault shown over the video. */
+  broll?: Cutaway[];
 }
 
 export interface EditVideo {
@@ -357,7 +333,7 @@ export async function getCuts(videoId: string): Promise<number[]> {
   await fs.writeFile(cache, JSON.stringify(cuts));
   return cuts;
 }
-export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema, captions: captionsSchema.optional() });
+export const planSchema = z.object({ steps: z.array(stepSchema).max(30), label: labelSchema, captions: captionsSchema.optional(), broll: z.array(brollSchema).max(MAX_CUTAWAYS).default([]) });
 
 /** Read-change-write of one video's record, one at a time per video so two renders finishing together keep both drafts. */
 const recordLocks = new Map<string, Promise<unknown>>();
@@ -500,6 +476,7 @@ export interface RenderInput {
   steps: Step[];
   label: Label;
   captions?: Captions;
+  broll?: Cutaway[];
   /** Who pressed Render; shown on the draft. */
   createdBy?: string;
 }
@@ -509,8 +486,9 @@ export async function startRender(r: RenderInput): Promise<RenderJob> {
   const status = await engineStatus();
   if (!status.ready) throw badRequest(status.message);
   const captions = r.captions ?? DEFAULT_CAPTIONS;
-  if (r.steps.length === 0 && !r.label.enabled && !captions.enabled) throw badRequest('Add at least one effect, the captions or the label');
+  if (r.steps.length === 0 && !r.label.enabled && !captions.enabled && !r.broll?.length) throw badRequest('Add at least one effect, B-roll, the captions or the label');
   const { file, record } = await videoFile(r.videoId);
+  const cutaways = checkCutaways(r.broll ?? [], record.durationSec);
   const plan = r.steps.length > 0 ? await buildPlan(r.steps) : null;
   const job: RenderJob = { id: crypto.randomUUID(), status: 'running', message: 'Rendering the effects. This takes a few minutes.' };
   jobs.set(job.id, job);
@@ -520,11 +498,19 @@ export async function startRender(r: RenderInput): Promise<RenderJob> {
       await fs.mkdir(work, { recursive: true });
       await fs.mkdir(dir('out'), { recursive: true });
       let rendered = path.resolve(file);
+      if (cutaways.length > 0) {
+        job.message = 'Laying in the B-roll';
+        const withBroll = path.join(work, 'broll.mp4');
+        await composeBroll({ base: rendered, out: withBroll, cutaways });
+        rendered = withBroll;
+      }
       if (plan) {
+        job.message = 'Rendering the effects. This takes a few minutes.';
         await fs.writeFile(path.join(work, 'plan.json'), plan);
         const { python, script } = enginePaths();
-        rendered = path.join(work, 'effects.mp4');
-        await run(python, [script, '--plan', path.join(work, 'plan.json'), path.resolve(file), rendered], { timeoutMs: 60 * 60_000 });
+        const withEffects = path.join(work, 'effects.mp4');
+        await run(python, [script, '--plan', path.join(work, 'plan.json'), rendered, withEffects], { timeoutMs: 60 * 60_000 });
+        rendered = withEffects;
       }
       const id = crypto.randomUUID();
       const finalFile = dir('out', `${id}.mp4`);
@@ -536,13 +522,13 @@ export async function startRender(r: RenderInput): Promise<RenderJob> {
       } else {
         await fs.copyFile(rendered, finalFile);
       }
-      const title = `${record.name.replace(/\.[^.]+$/, '')} (${[r.steps.length ? 'effects' : '', captions.enabled ? 'captions' : '', r.label.enabled ? 'labeled' : ''].filter(Boolean).join(', ')})`;
+      const title = `${record.name.replace(/\.[^.]+$/, '')} (${[cutaways.length ? 'b-roll' : '', r.steps.length ? 'effects' : '', captions.enabled ? 'captions' : '', r.label.enabled ? 'labeled' : ''].filter(Boolean).join(', ')})`;
       const url = `/api/edit/files/${id}.mp4`;
       const { rows } = await getDb().query<{ id: string }>(
         `INSERT INTO media_assets (org_id, type, title, url, thumb_url, tags, metadata, workspace_id) VALUES ($1,'video',$2,$3,$4,$5,$6::jsonb,$7) RETURNING id`,
         [r.orgId, title, url, placeholderImage(title, 'video'), ['edit', 'effects'], JSON.stringify({ source: 'edit', effects: r.steps.map((s) => s.fx), labeled: r.label.enabled, captions: captions.enabled, sourceVideo: record.name }), r.workspaceId],
       );
-      const settings: EditPlan = { steps: r.steps, label: r.label, captions };
+      const settings: EditPlan = { steps: r.steps, label: r.label, captions, broll: cutaways };
       job.draft = await updateRecord(r.videoId, (rec) => {
         const n = nextNumber(rec.drafts);
         const prev = rec.drafts?.[rec.drafts.length - 1];

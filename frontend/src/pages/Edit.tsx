@@ -1,11 +1,11 @@
 import { ArrowLeft, Check, Film, Play, Plus, Send, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useCan } from '../auth/context';
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, PageHeader, Select, Skeleton, Textarea } from '../components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Select, Skeleton, Textarea } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { timeAgo, usd } from '../lib/format';
-import { useApi, useDocumentTitle } from '../lib/hooks';
+import { useApi, useDebounced, useDocumentTitle } from '../lib/hooks';
 import { useToast } from '../state/Toast';
 
 interface Effect {
@@ -48,7 +48,26 @@ interface Video {
   createdAt: string;
   beats: BeatCounts;
   durationSec: number | null;
-  plan?: { steps: ApiStep[]; label: { enabled: boolean; text: string }; captions?: { enabled: boolean; wordsPerLine: number; style?: CapStyle } };
+  plan?: { steps: ApiStep[]; label: { enabled: boolean; text: string }; captions?: { enabled: boolean; wordsPerLine: number; style?: CapStyle }; broll?: Cutaway[] };
+}
+/** A Vault clip shown over the video from `start` to `end`, playing from `from` seconds into the clip. */
+interface Cutaway {
+  clipId: string;
+  start: number;
+  end: number;
+  from: number;
+}
+interface BrollItem extends Cutaway {
+  key: number;
+}
+interface VaultClip {
+  id: string;
+  name: string;
+  thumb: string;
+  durationSec: number | null;
+  folder: string;
+  description: string;
+  sorted: boolean;
 }
 interface Step {
   key: number;
@@ -148,6 +167,9 @@ export default function Edit() {
   const [capStyle, setCapStyle] = useState<CapStyle>(RGM_CAPTIONS);
   const [job, setJob] = useState<Job | null>(null);
   const [beatId, setBeatId] = useState('');
+  const [broll, setBroll] = useState<BrollItem[]>([]);
+  const [clipInfo, setClipInfo] = useState<Record<string, VaultClip>>({});
+  const [params, setParams] = useSearchParams();
   const nextKey = useRef(1);
   const fileInput = useRef<HTMLInputElement>(null);
   const loadedFor = useRef('');
@@ -162,8 +184,29 @@ export default function Edit() {
   const isLegal = /greene legal/i.test(workspaceName);
   const workspaceCaptions = isLegal ? GLG_CAPTIONS : RGM_CAPTIONS;
   const captionsBody = { enabled: capsOn, wordsPerLine: perLine, style: capStyle };
+  const brollBody: Cutaway[] = broll.map((b) => ({ clipId: b.clipId, start: b.start, end: b.end, from: b.from }));
 
   useEffect(() => () => void (previewUrl && URL.revokeObjectURL(previewUrl)), [previewUrl]);
+
+  // Arriving from the Vault ("Use as B-roll in an edit") opens that edit straight away
+  useEffect(() => {
+    const want = params.get('video');
+    if (want && videos.data?.some((v) => v.id === want)) {
+      setVideoId(want);
+      setParams({}, { replace: true });
+    }
+  }, [params, videos.data, setParams]);
+
+  // The names and pictures of the Vault clips used as B-roll
+  const brollIds = [...new Set(broll.map((b) => b.clipId))].join(',');
+  useEffect(() => {
+    const missing = brollIds.split(',').filter((id) => id && !clipInfo[id]);
+    if (missing.length === 0) return;
+    api
+      .get<{ items: VaultClip[] }>(`/vault/clips?ids=${missing.join(',')}&duplicates=all&limit=100`)
+      .then((r) => setClipInfo((c) => ({ ...c, ...Object.fromEntries(r.items.map((i) => [i.id, i])) })))
+      .catch(() => undefined);
+  }, [brollIds]);
 
   // Load the saved edit when a video is chosen, so Elle and Ruth see the same effects and label.
   useEffect(() => {
@@ -177,8 +220,9 @@ export default function Edit() {
     setPerLine(p?.captions?.wordsPerLine ?? 3);
     const style = p?.captions?.style ?? workspaceCaptions;
     setCapStyle(style);
+    setBroll((p?.broll ?? []).map((c) => ({ key: nextKey.current++, clipId: c.clipId, start: c.start, end: c.end, from: c.from })));
     savedPlan.current = JSON.stringify({
-      steps: p?.steps ?? [], label: p?.label ?? { enabled: false, text: DEFAULT_LABEL }, captions: { enabled: p?.captions?.enabled ?? false, wordsPerLine: p?.captions?.wordsPerLine ?? 3, style },
+      steps: p?.steps ?? [], label: p?.label ?? { enabled: false, text: DEFAULT_LABEL }, captions: { enabled: p?.captions?.enabled ?? false, wordsPerLine: p?.captions?.wordsPerLine ?? 3, style }, broll: p?.broll ?? [],
     });
     setPreviewUrl(null);
     setBeatId('');
@@ -187,14 +231,14 @@ export default function Edit() {
   // ...and save it again a moment after it changes.
   useEffect(() => {
     if (!videoId || loadedFor.current !== videoId || !canWrite) return;
-    const body = { steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText }, captions: captionsBody };
+    const body = { steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText }, captions: captionsBody, broll: brollBody };
     const json = JSON.stringify(body);
     if (json === savedPlan.current) return;
     const t = setTimeout(() => {
       api.put(`/edit/videos/${videoId}/plan`, body).then(() => void (savedPlan.current = json)).catch((e) => toast.error(errorMessage(e)));
     }, 800);
     return () => clearTimeout(t);
-  }, [steps, labelOn, labelText, capsOn, perLine, capStyle, videoId, canWrite, toast]);
+  }, [steps, labelOn, labelText, capsOn, perLine, capStyle, broll, videoId, canWrite, toast]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -239,7 +283,7 @@ export default function Edit() {
 
   async function render() {
     try {
-      setJob(await api.post<Job>('/edit/render', { videoId, steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText }, captions: captionsBody }));
+      setJob(await api.post<Job>('/edit/render', { videoId, steps: steps.map(toApiStep), label: { enabled: labelOn, text: labelText }, captions: captionsBody, broll: brollBody }));
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -271,7 +315,8 @@ export default function Edit() {
     act(() => api.post<Beat>(`/edit/videos/${videoId}/beats`, b)).then((r) => r && setBeatId(r.id));
 
   const ready = effects.data?.engine.ready;
-  const canRun = canWrite && !!videoId && (steps.length > 0 || labelOn || capsOn) && steps.every((s) => s.end > s.start);
+  const canRun = canWrite && !!videoId && (steps.length > 0 || labelOn || capsOn || broll.length > 0) && steps.every((s) => s.end > s.start) && broll.every((b) => b.end > b.start);
+  const addBroll = (list: Cutaway[]) => setBroll((p) => [...p, ...list.map((c) => ({ key: nextKey.current++, ...c }))]);
 
   return (
     <div>
@@ -317,7 +362,9 @@ export default function Edit() {
           <>
           <BeatStrip beats={beatList} duration={duration} selectedId={beat?.id ?? ''} onSelect={setBeatId} onAdd={addBeat} canWrite={canWrite} videoId={videoId} onSuggested={beats.reload} />
 
-          <Timeline videoId={videoId} duration={duration} beats={beatList} steps={steps} capsOn={capsOn} selectedId={beat?.id ?? ''} onSelect={setBeatId} wordsVersion={wordsVersion} />
+          <Timeline videoId={videoId} duration={duration} beats={beatList} steps={steps} capsOn={capsOn} selectedId={beat?.id ?? ''} onSelect={setBeatId} wordsVersion={wordsVersion} broll={broll} clipInfo={clipInfo} />
+
+          <BrollPanel videoId={videoId} duration={duration} beat={beat} beats={beatList} broll={broll} setBroll={setBroll} addBroll={addBroll} clipInfo={clipInfo} setClipInfo={setClipInfo} canWrite={canWrite} />
 
           <TranscriptEditor key={videoId} videoId={videoId} canWrite={canWrite} onSaved={() => setWordsVersion((v) => v + 1)} />
 
@@ -521,8 +568,8 @@ function lanes(bars: Bar[]): Bar[][] {
 }
 
 /** The whole video on one time axis: the beats, the effects by kind, where the shots cut, and where the captions run. */
-function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelect, wordsVersion }: {
-  videoId: string; duration: number; beats: Beat[]; steps: Step[]; capsOn: boolean; selectedId: string; onSelect: (id: string) => void; wordsVersion: number;
+function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelect, wordsVersion, broll, clipInfo }: {
+  videoId: string; duration: number; beats: Beat[]; steps: Step[]; capsOn: boolean; selectedId: string; onSelect: (id: string) => void; wordsVersion: number; broll: BrollItem[]; clipInfo: Record<string, VaultClip>;
 }) {
   const cuts = useApi<number[]>(`/edit/videos/${videoId}/cuts`);
   const words = useApi<{ words: { w: string; s: number; e: number }[] }>(`/edit/videos/${videoId}/words`);
@@ -553,6 +600,7 @@ function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelec
 
   const rows: { name: string; note?: string; bars: Bar[]; empty?: string }[] = [
     { name: 'Beats', bars: beatBars, empty: 'Add beats above' },
+    { name: 'B-roll', bars: broll.map((b) => ({ key: b.key, start: b.start, end: b.end, label: clipInfo[b.clipId]?.name ?? 'Vault clip', className: 'bg-amber-500/30 border-amber-500/60' })), empty: 'None yet' },
     { name: 'Titles & Cards', bars: fxBars('cards'), empty: 'None yet' },
     { name: 'Zoom', bars: fxBars('zoom'), empty: 'None yet' },
     ...(steps.some((s) => rowOf(s.fx) === 'look') ? [{ name: 'Looks', bars: fxBars('look') }] : []),
@@ -619,6 +667,129 @@ function Timeline({ videoId, duration, beats, steps, capsOn, selectedId, onSelec
         </div>
       </div>
       <p className="mt-2 text-xs text-slate-500">Click a beat to review it. Cuts are where the picture changes to a different shot, found automatically.</p>
+    </Card>
+  );
+}
+
+/** Clips from the Content Vault laid over the video while its own sound carries on. */
+function BrollPanel({ videoId, duration, beat, beats, broll, setBroll, addBroll, clipInfo, setClipInfo, canWrite }: {
+  videoId: string; duration: number; beat: Beat | null; beats: Beat[]; broll: BrollItem[]; setBroll: React.Dispatch<React.SetStateAction<BrollItem[]>>;
+  addBroll: (list: Cutaway[]) => void; clipInfo: Record<string, VaultClip>; setClipInfo: React.Dispatch<React.SetStateAction<Record<string, VaultClip>>>; canWrite: boolean;
+}) {
+  const toast = useToast();
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState('');
+  const q = useDebounced(search);
+  const clips = useApi<{ items: VaultClip[]; total: number }>(picking ? `/vault/clips?limit=48${q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ''}` : null);
+
+  async function suggest() {
+    setBusy(true);
+    try {
+      const r = await api.post<{ costUsd: number; picks: { cutaway: Cutaway; beat: number; why: string }[] }>(`/edit/videos/${videoId}/broll/suggest`);
+      if (r.picks.length === 0) toast.success(`Nothing in your Vault lines up with these beats (cost ${usd(r.costUsd)}).`);
+      else {
+        addBroll(r.picks.map((p) => p.cutaway));
+        toast.success(`Placed ${r.picks.length} clip${r.picks.length === 1 ? '' : 's'} on your beats for ${usd(r.costUsd)}. Check each one, then render.`);
+      }
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    setBusy(false);
+  }
+
+  /** A picked clip goes on the selected beat (a moment in, up to 3 seconds); with no beats it goes at the start. */
+  function add(c: VaultClip) {
+    setClipInfo((all) => ({ ...all, [c.id]: c }));
+    const start = beat ? round1(beat.startSec + 0.3) : 0;
+    const room = beat ? beat.endSec - start : duration - start;
+    const end = round1(start + Math.max(0.5, Math.min(3, c.durationSec ?? 3, room)));
+    addBroll([{ clipId: c.id, start, end, from: 0 }]);
+    setPicking(false);
+  }
+  const patch = (key: number, p: Partial<BrollItem>) => setBroll((all) => all.map((b) => (b.key === key ? { ...b, ...p } : b)));
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        eyebrow="From your Vault"
+        title="B-roll"
+        action={
+          canWrite && (
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => void suggest()} loading={busy} disabled={beats.length === 0} title={beats.length === 0 ? 'Add beats first so there are places to put clips' : undefined}>
+                <Sparkles className="h-4 w-4" aria-hidden /> Suggest from my Vault
+              </Button>
+              <Button onClick={() => setPicking(true)}>
+                <Plus className="h-4 w-4" aria-hidden /> Add a clip
+              </Button>
+              {broll.length > 0 && <Button variant="ghost" onClick={() => setBroll([])}>Clear</Button>}
+            </div>
+          )
+        }
+      />
+      <p className="text-sm text-slate-400">A clip from your Vault shows over the video for a few seconds while your voice carries on. Effects, captions and the label go on top. Suggesting costs a cent or two and the exact cost is shown after.</p>
+      {broll.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">No B-roll yet.{beats.length === 0 ? ' Add beats above and Claude can match your clips to them.' : ''}</p>
+      ) : (
+        <ul className="mt-4 space-y-2">
+          {[...broll].sort((a, b) => a.start - b.start).map((b) => {
+            const c = clipInfo[b.clipId];
+            const len = round1(b.end - b.start);
+            const short = c?.durationSec != null && c.durationSec - b.from < len - 0.05;
+            return (
+              <li key={b.key} className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 p-2.5">
+                {c?.thumb ? <img src={c.thumb} alt="" className="h-12 w-20 rounded object-cover" /> : <div className="grid h-12 w-20 place-items-center rounded bg-slate-900 text-[10px] text-slate-600">{c ? 'No preview' : '…'}</div>}
+                <div className="min-w-40 flex-1">
+                  <div className="truncate text-sm font-medium" title={c?.name}>{c?.name ?? 'Vault clip'}</div>
+                  <div className="truncate text-xs text-slate-500">{c ? `${c.folder || 'Not sorted'}${c.description ? ` · ${c.description}` : ''}` : 'Not found in the Vault (it may have been removed)'}</div>
+                  {short && <div className="text-xs text-amber-300">The clip is shorter than this, so it repeats.</div>}
+                </div>
+                <label className="text-xs text-slate-400">Shows at
+                  <Input type="number" step="0.1" min="0" max={duration} className="mt-0.5 w-24" value={b.start} disabled={!canWrite} onChange={(e) => patch(b.key, { start: num(e.target.value) })} />
+                </label>
+                <label className="text-xs text-slate-400">Until
+                  <Input type="number" step="0.1" min="0" max={duration} className="mt-0.5 w-24" value={b.end} disabled={!canWrite} onChange={(e) => patch(b.key, { end: num(e.target.value) })} />
+                </label>
+                <label className="text-xs text-slate-400">Clip from
+                  <Input type="number" step="0.1" min="0" className="mt-0.5 w-24" value={b.from} disabled={!canWrite} onChange={(e) => patch(b.key, { from: num(e.target.value) })} />
+                </label>
+                {canWrite && (
+                  <Button size="sm" variant="ghost" aria-label={`Remove ${c?.name ?? 'clip'}`} onClick={() => setBroll((all) => all.filter((x) => x.key !== b.key))}>
+                    <Trash2 className="h-4 w-4" aria-hidden />
+                  </Button>
+                )}
+                {b.end <= b.start && <div className="w-full text-xs text-rose-300">It must end after it starts.</div>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <Modal open={picking} onClose={() => setPicking(false)} title="Pick a clip from your Vault" wide>
+        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search names, tags, what happens" aria-label="Search the Vault" />
+        {beat && <p className="mt-2 text-xs text-slate-500">It will go on the selected beat: {beat.title || 'untitled'} ({clock(beat.startSec)} to {clock(beat.endSec)}). You can move it after.</p>}
+        {clips.error ? (
+          <p className="mt-3 text-sm text-rose-300">{clips.error}</p>
+        ) : !clips.data ? (
+          <Skeleton className="mt-3 h-40" />
+        ) : clips.data.items.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No clips found. Add footage on the Vault page.</p>
+        ) : (
+          <ul className="mt-3 grid max-h-[50vh] grid-cols-2 gap-2 overflow-auto sm:grid-cols-3 lg:grid-cols-4">
+            {clips.data.items.map((c) => (
+              <li key={c.id}>
+                <button onClick={() => add(c)} className="block w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-left hover:border-slate-500">
+                  {c.thumb ? <img src={c.thumb} alt="" className="aspect-video w-full object-cover" /> : <div className="grid aspect-video place-items-center text-xs text-slate-600">No preview</div>}
+                  <div className="p-1.5">
+                    <div className="truncate text-xs font-medium">{c.name}</div>
+                    <div className="truncate text-[11px] text-slate-500">{c.folder || 'Not sorted'}{c.durationSec ? ` · ${round1(c.durationSec)}s` : ''}</div>
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </Card>
   );
 }

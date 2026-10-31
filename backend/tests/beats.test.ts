@@ -114,7 +114,7 @@ describe('beats', () => {
     const plan = { steps: [{ fx: 'backdrop-word', start: 0, end: 3, text: 'NEGOTIATE', options: { color: '#99577a' } }], label: { enabled: true, text: 'DRAMATIZATION' } };
     expect((await call('PUT', `/edit/videos/${videoId}/plan`, 'user', plan)).status).toBe(200);
     const videos = (await call('GET', '/edit/videos', 'admin')).json as { id: string; plan?: typeof plan }[];
-    expect(videos.find((v) => v.id === videoId)?.plan).toEqual(plan);
+    expect(videos.find((v) => v.id === videoId)?.plan).toEqual({ ...plan, broll: [] }); // no B-roll chosen, so an empty list is kept
   });
 
   it('lists each video with its beat roll-up, who added it, and lets the team rename it', async () => {

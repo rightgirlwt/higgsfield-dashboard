@@ -7,6 +7,8 @@ export interface DraftPlan {
   steps: { fx: string; start: number; end: number; text?: string; options?: Record<string, string | number> }[];
   label: { enabled: boolean; text: string };
   captions?: { enabled: boolean; wordsPerLine: number; style?: Record<string, unknown> };
+  /** Vault clips shown over the video. */
+  broll?: { clipId: string; start: number; end: number; from: number }[];
 }
 
 /** One rendered version of an edit: v1, v2, ... */
@@ -50,6 +52,15 @@ export function describeChanges(prev: DraftPlan | undefined, next: DraftPlan): s
   }
   if (added.length) out.push(`Added or changed: ${[...new Set(added)].join(', ')}`);
   if (removed.length) out.push(`Removed or replaced: ${[...new Set(removed)].join(', ')}`);
+
+  const bKey = (b: { clipId: string; start: number; end: number; from: number }) => JSON.stringify([b.clipId, b.start, b.end, b.from]);
+  const pb = new Set((prev.broll ?? []).map(bKey));
+  const nb = new Set((next.broll ?? []).map(bKey));
+  const gained = [...nb].filter((k) => !pb.has(k)).length;
+  const lost = [...pb].filter((k) => !nb.has(k)).length;
+  if (gained && !lost && !pb.size) out.push(`Added B-roll (${gained} clip${gained === 1 ? '' : 's'})`);
+  else if (lost && !gained && !nb.size) out.push('Removed the B-roll');
+  else if (gained || lost) out.push('Changed the B-roll');
 
   const pc = prev.captions;
   const nc = next.captions;

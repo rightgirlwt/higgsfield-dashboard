@@ -2,6 +2,7 @@ import express, { Router } from 'express';
 import { z } from 'zod';
 import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
+import { reelToEdit } from '../services/brollPlan';
 import { signVaultLink } from '../services/sourceLinks';
 import { MAX_UPLOAD_BYTES } from '../services/effects';
 import {
@@ -26,7 +27,7 @@ vault.get(
   wrap(async (req, res) => {
     res.json(
       await listClips(req.user!.orgId, req.workspace!, {
-        folder: str(req.query.folder), day: str(req.query.day), q: str(req.query.q), duplicates: str(req.query.duplicates), unsorted: req.query.unsorted === '1',
+        ids: str(req.query.ids)?.split(',').filter(Boolean), folder: str(req.query.folder), day: str(req.query.day), q: str(req.query.q), duplicates: str(req.query.duplicates), unsorted: req.query.unsorted === '1',
         limit: Number(req.query.limit) || undefined, offset: Number(req.query.offset) || undefined,
       }),
     );
@@ -121,6 +122,15 @@ vault.post(
   wrap(async (req, res) => {
     const b = z.object({ approved: z.boolean().default(false), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), count: z.number().int().min(1).max(8).default(5) }).parse(req.body ?? {});
     res.json(await suggestReels(req.user!.orgId, req.workspace!, b));
+  }),
+);
+
+/** Lays the reel's clips over an edit as B-roll (replacing the edit's current B-roll) and saves the edit's plan. */
+vault.post(
+  '/reels/:id/to-edit',
+  wrap(async (req, res) => {
+    const { videoId } = z.object({ videoId: z.string().uuid() }).parse(req.body);
+    res.json(await reelToEdit(req.user!.orgId, id(req), videoId));
   }),
 );
 
