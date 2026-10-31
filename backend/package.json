@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "migrate": "tsx src/db/migrate-cli.ts",
+    "sync-voices": "node scripts/sync-voices.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },

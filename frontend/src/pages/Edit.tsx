@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Film, Play, Plus, Send, Sparkles, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, Check, Film, Package, Play, Plus, Send, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useCan } from '../auth/context';
@@ -38,6 +38,17 @@ interface Draft {
   status: BeatStatus;
   note: string;
   changes: string[];
+  package?: PostPackageData;
+}
+interface PostPackageData {
+  hook: string;
+  caption: string;
+  hashtags: string[];
+  coverSec: number;
+  firstComment: string;
+  checks: { id: string; level: 'must' | 'tip'; ok: boolean; text: string }[];
+  updatedAt: string;
+  updatedBy: string;
 }
 interface Video {
   drafts?: Draft[];
@@ -512,7 +523,7 @@ export default function Edit() {
                 )}
               </Card>
 
-              <Drafts videoId={videoId} drafts={video?.drafts ?? []} canWrite={canWrite} isReviewer={isReviewer} onChanged={videos.reload} />
+              <Drafts videoId={videoId} drafts={video?.drafts ?? []} durationSec={video?.durationSec ?? null} canWrite={canWrite} isReviewer={isReviewer} onChanged={videos.reload} />
 
             </div>
 
@@ -1078,9 +1089,10 @@ function TranscriptEditor({ videoId, canWrite, onSaved }: { videoId: string; can
 }
 
 /** Every render is kept as a numbered draft. The editor submits one, the admin approves it or asks for changes; any two can be watched side by side. */
-function Drafts({ videoId, drafts, canWrite, isReviewer, onChanged }: { videoId: string; drafts: Draft[]; canWrite: boolean; isReviewer: boolean; onChanged: () => void }) {
+function Drafts({ videoId, drafts, durationSec, canWrite, isReviewer, onChanged }: { videoId: string; drafts: Draft[]; durationSec: number | null; canWrite: boolean; isReviewer: boolean; onChanged: () => void }) {
   const toast = useToast();
   const [pick, setPick] = useState<number[]>([]);
+  const [packing, setPacking] = useState<number | null>(null);
   const [asking, setAsking] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const list = [...drafts].sort((a, b) => b.n - a.n);
@@ -1131,7 +1143,9 @@ function Drafts({ videoId, drafts, canWrite, isReviewer, onChanged }: { videoId:
                     <Button size="sm" onClick={() => { setAsking(asking === d.n ? null : d.n); setNote(''); }}>Request changes</Button>
                   </>
                 )}
+                <Button size="sm" onClick={() => setPacking(packing === d.n ? null : d.n)}><Package className="h-4 w-4" aria-hidden /> {packing === d.n ? 'Hide post package' : d.package ? 'Post package' : 'Get ready to post'}</Button>
               </div>
+              {packing === d.n && <PostPackage videoId={videoId} draft={d} durationSec={durationSec} canWrite={canWrite} onChanged={onChanged} />}
               {asking === d.n && (
                 <div className="mt-3 space-y-2">
                   <Field label="What should change?" htmlFor={`dn-${d.n}`}><Textarea id={`dn-${d.n}`} rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
@@ -1154,6 +1168,131 @@ function Drafts({ videoId, drafts, canWrite, isReviewer, onChanged }: { videoId:
       )}
       {pick.length === 1 && <p className="mt-3 text-xs text-slate-500">Tick one more draft to watch the two side by side.</p>}
     </Card>
+  );
+}
+
+/** What a draft needs to go out: Claude writes the caption and tags, you adjust them, pick the cover, check the list, and take it all as one zip to your scheduler. */
+function PostPackage({ videoId, draft, durationSec, canWrite, onChanged }: { videoId: string; draft: Draft; durationSec: number | null; canWrite: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const base = `/edit/videos/${videoId}/drafts/${draft.n}`;
+  const pkg = draft.package;
+  const [busy, setBusy] = useState<'write' | 'save' | 'zip' | null>(null);
+  const [caption, setCaption] = useState(pkg?.caption ?? '');
+  const [tags, setTags] = useState((pkg?.hashtags ?? []).join(' '));
+  const [firstComment, setFirstComment] = useState(pkg?.firstComment ?? '');
+  const [coverSec, setCoverSec] = useState(pkg?.coverSec ?? 0);
+  const [cover, setCover] = useState('');
+  const hook = pkg?.hook ?? '';
+  const tagList = useMemo(() => tags.split(/[\s,]+/).filter(Boolean), [tags]);
+  const dirty = !!pkg && (caption !== pkg.caption || tagList.join(' ') !== pkg.hashtags.join(' ') || firstComment !== pkg.firstComment || coverSec !== pkg.coverSec);
+
+  // A new package from Claude (or a save) replaces what is in the boxes
+  useEffect(() => {
+    if (!pkg) return;
+    setCaption(pkg.caption);
+    setTags(pkg.hashtags.join(' '));
+    setFirstComment(pkg.firstComment);
+    setCoverSec(pkg.coverSec);
+  }, [pkg?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const wanted = useDebounced(coverSec, 350);
+  useEffect(() => {
+    if (!pkg) return;
+    let live = true;
+    api.post<{ image: string }>(`${base}/cover`, { time: wanted }).then((r) => live && setCover(r.image), () => live && setCover(''));
+    return () => { live = false; };
+  }, [wanted, !!pkg, base]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function write() {
+    setBusy('write');
+    try {
+      const r = await api.post<{ costUsd: number }>(`${base}/package/write`);
+      toast.success(`Caption written for ${usd(r.costUsd)}. Read it and make it yours.`);
+      onChanged();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function save() {
+    setBusy('save');
+    try {
+      await api.put(`${base}/package`, { hook, caption, hashtags: tagList, coverSec, firstComment });
+      toast.success('Saved');
+      onChanged();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function zip() {
+    setBusy('zip');
+    try {
+      await api.download(`${base}/package.zip`, `v${draft.n}-ready-to-post.zip`);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(`${caption.trim()}\n\n${tagList.map((t) => (t.startsWith('#') ? t : `#${t}`)).join(' ')}`);
+      toast.success('Caption and hashtags copied');
+    } catch {
+      toast.error('Could not copy. Select the text and copy it.');
+    }
+  }
+
+  if (!pkg) {
+    return (
+      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+        <p className="text-sm text-slate-300">Claude reads what is said in the video, then writes the caption, hashtags and a cover pick in this account's voice, using the same writing rules as in Claude. About 2 cents, up to 4 if it has to rewrite a line.</p>
+        <Button className="mt-3" size="sm" variant="primary" disabled={!canWrite || busy === 'write'} onClick={() => void write()}><Sparkles className="h-4 w-4" aria-hidden /> {busy === 'write' ? 'Writing…' : 'Write the caption'}</Button>
+      </div>
+    );
+  }
+
+  const stuck = pkg.checks.filter((c) => c.level === 'must' && !c.ok);
+  return (
+    <div className="mt-3 grid gap-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3 sm:grid-cols-[150px_1fr]">
+      <div>
+        <div className="aspect-[9/16] w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-900">
+          {cover && <img src={cover} alt="Cover frame" className="h-full w-full object-cover" />}
+        </div>
+        <label className="mt-2 block text-[11px] text-slate-400">Cover at {coverSec.toFixed(1)}s
+          <input type="range" className="w-full" min={0} max={Math.max(0.1, (durationSec ?? 1) - 0.2)} step={0.1} value={coverSec} disabled={!canWrite} onChange={(e) => setCoverSec(Number(e.target.value))} />
+        </label>
+      </div>
+      <div className="space-y-3">
+        <Field label="Caption" htmlFor={`pc-${draft.n}`}><Textarea id={`pc-${draft.n}`} rows={6} value={caption} disabled={!canWrite} onChange={(e) => setCaption(e.target.value)} /></Field>
+        <Field label="Hashtags" htmlFor={`pt-${draft.n}`}><Input id={`pt-${draft.n}`} value={tags} disabled={!canWrite} onChange={(e) => setTags(e.target.value)} /></Field>
+        <Field label="Pinned first comment (optional)" htmlFor={`pf-${draft.n}`}><Input id={`pf-${draft.n}`} value={firstComment} disabled={!canWrite} onChange={(e) => setFirstComment(e.target.value)} /></Field>
+
+        <div aria-label="Before you post">
+          <div className="mb-1 text-xs font-semibold text-slate-300">Before you post</div>
+          <ul className="space-y-1 text-xs">
+            {pkg.checks.map((c) => (
+              <li key={c.id} className={c.ok ? 'text-slate-400' : c.level === 'must' ? 'text-red-300' : 'text-amber-200'}>
+                {c.ok ? '✓' : c.level === 'must' ? '✕' : '○'} {c.text}
+              </li>
+            ))}
+          </ul>
+          {dirty && <p className="mt-1 text-[11px] text-slate-500">Save to refresh this list for your edits.</p>}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {canWrite && <Button size="sm" variant="primary" disabled={!dirty || busy === 'save'} onClick={() => void save()}>{busy === 'save' ? 'Saving…' : 'Save changes'}</Button>}
+          <Button size="sm" onClick={() => void copy()}>Copy caption</Button>
+          <Button size="sm" disabled={dirty || busy === 'zip'} onClick={() => void zip()}>{busy === 'zip' ? 'Preparing…' : 'Download for my scheduler'}</Button>
+          {canWrite && <Button size="sm" disabled={busy === 'write'} onClick={() => void write()}>{busy === 'write' ? 'Writing…' : 'Write it again'}</Button>}
+        </div>
+        {stuck.length > 0 && !dirty && <p className="text-xs text-red-300">{stuck.length} thing{stuck.length === 1 ? '' : 's'} above should be fixed before this goes out. The zip includes this list.</p>}
+        <p className="text-[11px] text-slate-500">The zip holds the video, the cover picture, caption.txt and the checklist. Posting stays in your scheduler.</p>
+      </div>
+    </div>
   );
 }
 

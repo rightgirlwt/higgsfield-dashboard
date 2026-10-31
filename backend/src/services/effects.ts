@@ -11,7 +11,7 @@ import { badRequest, HttpError, notFound } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
 import { logger } from '../logger';
 import { buildAss, type Captions, captionsSchema, DEFAULT_CAPTIONS, styleSchema } from './captions';
-import { approveDraft, describeChanges, type Draft, nextNumber, requestDraftChanges, submitDraft } from './drafts';
+import { approveDraft, describeChanges, type Draft, nextNumber, type PostPackage, requestDraftChanges, submitDraft } from './drafts';
 import { listFonts } from './fonts';
 import { cleanWords, type EditedWord } from './transcript';
 
@@ -353,9 +353,25 @@ async function updateRecord<T>(id: string, change: (record: EditVideo) => T): Pr
   }
 }
 
-export const submitVideoDraft = (id: string, n: number) => updateRecord(id, (r) => submitDraft(r.drafts, n));
-export const approveVideoDraft = (id: string, n: number) => updateRecord(id, (r) => approveDraft(r.drafts, n));
-export const requestVideoDraftChanges = (id: string, n: number, note: string) => updateRecord(id, (r) => requestDraftChanges(r.drafts, n, note));
+/** A draft's post checklist includes "this version has been approved", so it follows the draft's status. */
+function syncApprovedCheck(d: Draft): Draft {
+  const c = d.package?.checks.find((x) => x.id === 'approved');
+  if (c) c.ok = d.status === 'approved';
+  return d;
+}
+
+export const submitVideoDraft = (id: string, n: number) => updateRecord(id, (r) => syncApprovedCheck(submitDraft(r.drafts, n)));
+export const approveVideoDraft = (id: string, n: number) => updateRecord(id, (r) => syncApprovedCheck(approveDraft(r.drafts, n)));
+export const requestVideoDraftChanges = (id: string, n: number, note: string) => updateRecord(id, (r) => syncApprovedCheck(requestDraftChanges(r.drafts, n, note)));
+
+/** Stores the post package on a draft. `make` sees the draft, so its checks can use the draft's own label and status. */
+export const setDraftPackage = (id: string, n: number, make: (draft: Draft) => PostPackage) =>
+  updateRecord(id, (r) => {
+    const draft = r.drafts?.find((d) => d.n === n);
+    if (!draft) throw notFound('Draft not found');
+    draft.package = make(draft);
+    return draft.package;
+  });
 
 export async function savePlan(id: string, plan: EditPlan): Promise<EditVideo> {
   return updateRecord(id, (record) => {

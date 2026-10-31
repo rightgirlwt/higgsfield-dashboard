@@ -9,6 +9,7 @@ import {
 
 import { brollSchema, MAX_CUTAWAYS } from '../services/broll';
 import { suggestBroll } from '../services/brollPlan';
+import { coverFrame, makePackage, packageEdit, packageZip, savePackage } from '../services/postPackage';
 import { signSourceLink } from '../services/sourceLinks';
 import { wordsSchema } from '../services/transcript';
 
@@ -109,6 +110,40 @@ edit.post(
   wrap(async (req, res) => {
     const { note } = z.object({ note: z.string().trim().min(1).max(2000) }).parse(req.body);
     res.json(await requestVideoDraftChanges(req.params.id, draftNumber(req), note));
+  }),
+);
+
+// ---- the post package for a draft: caption, hashtags, cover, checklist, and one zip for the scheduler ----------
+/** One click: Claude writes the caption for this draft. The cost comes back afterwards, as with B-roll. */
+edit.post(
+  '/videos/:id/drafts/:n/package/write',
+  wrap(async (req, res) => {
+    res.json(await makePackage(req.user!.orgId, req.workspace!, req.params.id, draftNumber(req), req.user!.name));
+  }),
+);
+
+/** The person's own edits to the caption, tags and cover second. The checklist is worked out again from the new words. */
+edit.put(
+  '/videos/:id/drafts/:n/package',
+  wrap(async (req, res) => {
+    res.json(await savePackage(req.params.id, draftNumber(req), req.workspace!, packageEdit.parse(req.body), req.user!.name));
+  }),
+);
+
+/** The cover picture at a second, as a data link the page can show. */
+edit.post(
+  '/videos/:id/drafts/:n/cover',
+  wrap(async (req, res) => {
+    const { time } = z.object({ time: z.number().min(0).max(36_000) }).parse(req.body);
+    res.json({ image: `data:image/jpeg;base64,${(await coverFrame(req.params.id, draftNumber(req), time)).toString('base64')}` });
+  }),
+);
+
+edit.get(
+  '/videos/:id/drafts/:n/package.zip',
+  wrap(async (req, res) => {
+    const { name, data } = await packageZip(req.params.id, draftNumber(req));
+    res.type('application/zip').set('Content-Disposition', `attachment; filename="${name}"`).send(data);
   }),
 );
 

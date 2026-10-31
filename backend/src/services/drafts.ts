@@ -11,6 +11,19 @@ export interface DraftPlan {
   broll?: { clipId: string; start: number; end: number; from: number }[];
 }
 
+/** Everything needed to post a draft: the words, the cover, and what to double-check first. */
+export interface PostPackage {
+  hook: string;
+  caption: string;
+  hashtags: string[];
+  /** The second of the video used as the cover picture. */
+  coverSec: number;
+  firstComment: string;
+  checks: { id: string; level: 'must' | 'tip'; ok: boolean; text: string }[];
+  updatedAt: string;
+  updatedBy: string;
+}
+
 /** One rendered version of an edit: v1, v2, ... */
 export interface Draft {
   n: number;
@@ -24,6 +37,8 @@ export interface Draft {
   plan: DraftPlan;
   /** What is different from the draft before it, in plain words. */
   changes: string[];
+  /** Caption, hashtags and cover for posting this draft. */
+  package?: PostPackage;
 }
 
 const stepKey = (s: DraftPlan['steps'][number]) => JSON.stringify([s.fx, s.start, s.end, s.text ?? '', s.options ?? {}]);
