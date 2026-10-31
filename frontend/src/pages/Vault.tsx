@@ -1,4 +1,4 @@
-import { Calendar, Copy, FolderOpen, Layers, Search, Sparkles, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
+﻿import { Calendar, Copy, FolderOpen, Layers, Search, Sparkles, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCan } from '../auth/context';
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, Modal, PageHeader, ProgressBar, Select, Skeleton, Tabs } from '../components/ui';
@@ -66,14 +66,6 @@ interface Reel {
   why: string;
   status: 'idea' | 'saved' | 'used';
   beats: { clipId: string; line: string; seconds: number; clip: Clip | null }[];
-}
-interface SortQuote {
-  approved: false;
-  model: string;
-  clips: number;
-  estimateUsd: number;
-  maxUsd: number;
-  keyMissing: boolean;
 }
 interface ReelQuote {
   approved: false;
@@ -209,20 +201,20 @@ export default function Vault() {
       {tab === 'clips' && !empty && (
         <section className="mt-4" aria-label="Clips">
           <div className="flex flex-wrap items-center gap-2">
-            <Chip active={!folder && !view} onClick={() => (setFolder(''), setView(''))}>All {stats.data ? `· ${stats.data.clips}` : ''}</Chip>
+            <Chip active={!folder && !view} onClick={() => (setFolder(''), setView(''))}>All {stats.data ? `Â· ${stats.data.clips}` : ''}</Chip>
             {folders.map((f) => (
               <Chip key={f.folder} active={folder === f.folder} onClick={() => (setFolder(f.folder), setView(''))}>
-                {f.folder} · {f.n}
+                {f.folder} Â· {f.n}
               </Chip>
             ))}
             {!!stats.data?.unsorted && (
               <Chip active={view === 'unsorted'} onClick={() => (setView('unsorted'), setFolder(''))}>
-                Not sorted · {stats.data.unsorted}
+                Not sorted Â· {stats.data.unsorted}
               </Chip>
             )}
             {!!stats.data?.duplicates && (
               <Chip active={view === 'duplicates'} onClick={() => (setView('duplicates'), setFolder(''))}>
-                Duplicates · {stats.data.duplicates}
+                Duplicates Â· {stats.data.duplicates}
               </Chip>
             )}
           </div>
@@ -233,7 +225,7 @@ export default function Vault() {
             </div>
             {day && (
               <button onClick={() => setDay('')} className="inline-flex items-center gap-1 rounded-full bg-cyan-500/15 px-3 py-1 text-xs text-cyan-300 hover:bg-cyan-500/25">
-                <Calendar className="h-3 w-3" aria-hidden /> {dayText(day)} ✕
+                <Calendar className="h-3 w-3" aria-hidden /> {dayText(day)} âœ•
               </button>
             )}
             <span className="text-xs text-slate-500">{loading && items.length === 0 ? '' : `${total} clip${total === 1 ? '' : 's'}`}</span>
@@ -397,14 +389,14 @@ function AddFootage({ isAdmin, onDone }: { isAdmin: boolean; onDone: () => void 
       {job && (
         <div className="mt-4" aria-live="polite">
           <div className="mb-1 text-xs text-slate-400">
-            Reading clips: {job.done} of {job.total} {job.note && <span className="text-slate-500">· {job.note}</span>}
+            Reading clips: {job.done} of {job.total} {job.note && <span className="text-slate-500">Â· {job.note}</span>}
           </div>
           <ProgressBar value={job.total ? (job.done / job.total) * 100 : 0} label="Reading clips" />
         </div>
       )}
       {uploading && (
         <div className="mt-4 text-xs text-slate-400" aria-live="polite">
-          Uploading clip {uploading.at} of {uploading.of}…
+          Uploading clip {uploading.at} of {uploading.of}â€¦
           <div className="mt-1">
             <ProgressBar value={((uploading.at - 1) / uploading.of) * 100} label="Uploading" />
           </div>
@@ -414,24 +406,27 @@ function AddFootage({ isAdmin, onDone }: { isAdmin: boolean; onDone: () => void 
   );
 }
 
-/** The unsorted footage as a ball of tilted thumbnails, packed in a sunflower spiral so the middle is dense and the edge is loose. */
+/**
+ * The unsorted footage as a dense ball of small, white-bordered thumbnails tilted at every angle, packed in a sunflower spiral.
+ * A ball needs a lot of tiles to read as a ball, so a small Vault repeats its thumbnails; the real count is in the heading.
+ */
 function ClipBall({ thumbs, total }: { thumbs: string[]; total: number }) {
-  const n = thumbs.length;
-  const size = 260;
-  const radius = size / 2 - 22;
-  const w = Math.min(64, Math.max(30, 190 / Math.sqrt(Math.max(n, 1))));
+  const tiles = 130;
+  const size = 300;
+  const radius = size / 2 - 20;
+  const s = Math.sqrt((2.4 * Math.PI * radius * radius) / tiles);
   return (
     <div className="relative mx-auto shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${total} clips waiting to be sorted`}>
-      {thumbs.map((t, i) => {
-        const r = radius * Math.sqrt((i + 0.5) / n);
+      {Array.from({ length: tiles }, (_, i) => {
+        const r = radius * Math.sqrt((i + 0.5) / tiles) + (((i * 53) % 7) - 3);
         const a = i * 2.39996;
         return (
           <img
             key={i}
-            src={t}
+            src={thumbs[i % thumbs.length]}
             alt=""
-            className="absolute rounded-[3px] border border-white/70 object-cover shadow-md"
-            style={{ width: w, height: w * 0.62, left: size / 2 + r * Math.cos(a) - w / 2, top: size / 2 + r * Math.sin(a) - (w * 0.62) / 2, transform: `rotate(${((i * 37) % 60) - 30}deg)`, zIndex: n - i }}
+            className="absolute rounded-[3px] border-[1.5px] border-[#fdf8f3] object-cover shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+            style={{ width: s, height: s * 0.85, left: size / 2 + r * Math.cos(a) - s / 2, top: size / 2 + r * Math.sin(a) - (s * 0.85) / 2, transform: `rotate(${(i * 137.5) % 360}deg)`, zIndex: (i * 7) % tiles }}
           />
         );
       })}
@@ -489,9 +484,8 @@ function FolderBoxes({ active }: { active: boolean }) {
 
 function SortCard({ unsorted, onDone }: { unsorted: number; onDone: () => void }) {
   const toast = useToast();
-  const waiting = useApi<{ items: Clip[] }>(`/vault/clips?unsorted=1&limit=80&n=${unsorted}`);
+  const waiting = useApi<{ items: Clip[] }>(`/vault/clips?unsorted=1&limit=100&n=${unsorted}`);
   const thumbs = (waiting.data?.items ?? []).map((c) => c.thumb).filter(Boolean);
-  const [quote, setQuote] = useState<SortQuote | null>(null);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJob(jobId, (j) => {
@@ -501,21 +495,13 @@ function SortCard({ unsorted, onDone }: { unsorted: number; onDone: () => void }
     onDone();
   });
 
-  async function ask() {
+  /** One click: the server still works out the most this run can cost and stops there. */
+  async function sort() {
     setBusy(true);
     try {
-      setQuote(await api.post<SortQuote>('/vault/sort', { approved: false }));
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-    setBusy(false);
-  }
-  async function approve() {
-    setBusy(true);
-    try {
-      const j = await api.post<Job>('/vault/sort', { approved: true });
-      setQuote(null);
-      setJobId(j.id);
+      const q = await api.post<{ keyMissing: boolean }>('/vault/sort', { approved: false });
+      if (q.keyMissing) throw new Error('Add your Anthropic key in Settings first. Nothing has been spent.');
+      setJobId((await api.post<Job>('/vault/sort', { approved: true })).id);
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -527,40 +513,29 @@ function SortCard({ unsorted, onDone }: { unsorted: number; onDone: () => void }
       <div className="flex flex-wrap items-center gap-6">
         {thumbs.length > 0 && <ClipBall thumbs={thumbs} total={unsorted} />}
         <div className="min-w-60 flex-1">
-          <CardHeader eyebrow="Costs a little" title={`${unsorted} clip${unsorted === 1 ? '' : 's'} not sorted yet`} />
-          <p className="mt-2 text-sm text-slate-400">Claude looks at three frames from each clip and files it in a folder (Talking head, Desk, Studio, Close-ups and so on), with tags and a one-line description. You see the price first.</p>
+          <CardHeader eyebrow="A few cents in all" title={`${unsorted} clip${unsorted === 1 ? '' : 's'} not sorted yet`} />
+          <p className="mt-2 text-sm text-slate-400">Claude looks at three frames from each clip and files it in a folder (Talking head, Desk, Studio, Close-ups and so on), with tags and a one-line description. What it cost is shown when it finishes.</p>
+          {!job && (
+            <div className="mt-4">
+              <Button variant="primary" onClick={() => void sort()} loading={busy}>
+                <Sparkles className="h-4 w-4" aria-hidden /> Sort with Claude
+              </Button>
+            </div>
+          )}
         </div>
       </div>
       <FolderBoxes active={!!job} />
-      {job ? (
+      {job && (
         <div className="mt-4" aria-live="polite">
           <div className="mb-1 text-xs text-slate-400">
             Sorting: {job.done} of {job.total} · spent {usd(job.costUsd)}
           </div>
           <ProgressBar value={job.total ? (job.done / job.total) * 100 : 0} label="Sorting clips" />
         </div>
-      ) : quote ? (
-        <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm" role="status">
-          <p>
-            Sorting {quote.clips} clip{quote.clips === 1 ? '' : 's'} with {quote.model === 'claude-haiku-5-5' ? 'Claude Haiku 5.5' : quote.model} will cost about <strong>{usd(quote.estimateUsd)}</strong>, and never more than <strong>{usd(quote.maxUsd)}</strong>. {unsorted > quote.clips ? `This run does the newest ${quote.clips}; run it again for the rest.` : ''}
-          </p>
-          {quote.keyMissing && <p className="mt-2 text-amber-200">Add your Anthropic key in Settings first. Nothing has been spent.</p>}
-          <div className="mt-3 flex gap-2">
-            <Button variant="primary" onClick={() => void approve()} loading={busy} disabled={quote.keyMissing}>
-              <Sparkles className="h-4 w-4" aria-hidden /> Approve and sort
-            </Button>
-            <Button variant="ghost" onClick={() => setQuote(null)}>Cancel</Button>
-          </div>
-        </div>
-      ) : (
-        <div className="mt-3">
-          <Button onClick={() => void ask()} loading={busy}>See the price</Button>
-        </div>
       )}
     </Card>
   );
 }
-
 function ClipTile({ clip, onOpen }: { clip: Clip; onOpen: () => void }) {
   return (
     <button onClick={onOpen} className="group block w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-left transition hover:border-slate-600">
@@ -591,7 +566,7 @@ function DaysList({ days, error, onClips, onReels }: { days: Day[] | null; error
           <div className="min-w-48 flex-1">
             <div className="font-medium">{dayText(d.day)}</div>
             <div className="mt-0.5 text-xs text-slate-500">
-              {d.clips} clip{d.clips === 1 ? '' : 's'} · {mmss(d.seconds)} of footage · {timeText(d.first)}{d.clips > 1 ? ` to ${timeText(d.last)}` : ''}
+              {d.clips} clip{d.clips === 1 ? '' : 's'} Â· {mmss(d.seconds)} of footage Â· {timeText(d.first)}{d.clips > 1 ? ` to ${timeText(d.last)}` : ''}
             </div>
             <div className="mt-1.5 flex flex-wrap gap-1">{d.folders.map((f) => <Badge key={f} tone="slate">{f}</Badge>)}</div>
           </div>
@@ -702,11 +677,11 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={r.style === 'vlog' ? 'violet' : 'cyan'}>{r.style === 'vlog' ? `Vlog${r.day ? ` · ${dayText(r.day)}` : ''}` : 'Topic'}</Badge>
+                  <Badge tone={r.style === 'vlog' ? 'violet' : 'cyan'}>{r.style === 'vlog' ? `Vlog${r.day ? ` Â· ${dayText(r.day)}` : ''}` : 'Topic'}</Badge>
                   {r.status !== 'idea' && <Badge tone={r.status === 'used' ? 'emerald' : 'amber'}>{r.status === 'used' ? 'Used' : 'Saved'}</Badge>}
                 </div>
                 <h3 className="mt-1.5 text-lg font-semibold">{r.title}</h3>
-                {r.hook && <p className="mt-1 text-sm text-slate-300">Hook: “{r.hook}”</p>}
+                {r.hook && <p className="mt-1 text-sm text-slate-300">Hook: â€œ{r.hook}â€</p>}
               </div>
               {canWrite && (
                 <div className="flex gap-2">
@@ -727,8 +702,8 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
                     <div className="grid h-14 w-24 shrink-0 place-items-center rounded bg-slate-900 text-[10px] text-slate-600">Clip removed</div>
                   )}
                   <div className="min-w-0 text-xs">
-                    <div className="text-slate-500">{i + 1} · {b.seconds}s{b.clip ? ` · ${b.clip.folder}` : ''}</div>
-                    <div className="mt-0.5 text-slate-200">{b.line || '—'}</div>
+                    <div className="text-slate-500">{i + 1} Â· {b.seconds}s{b.clip ? ` Â· ${b.clip.folder}` : ''}</div>
+                    <div className="mt-0.5 text-slate-200">{b.line || 'â€”'}</div>
                     {b.clip && <div className="mt-0.5 truncate text-slate-500" title={b.clip.name}>{b.clip.name}</div>}
                   </div>
                 </li>
@@ -803,7 +778,7 @@ function ClipModal({ clip, names, canWrite, onClose, onChanged, toast }: { clip:
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
               <span>{dayText(clip.shotDate)}, {timeText(clip.shotAt)}</span>
               <span>{mmss(clip.durationSec)}</span>
-              {clip.width && clip.height && <span>{clip.width}×{clip.height}{clip.height > clip.width ? ' (vertical)' : ''}</span>}
+              {clip.width && clip.height && <span>{clip.width}Ã—{clip.height}{clip.height > clip.width ? ' (vertical)' : ''}</span>}
               <span>{mb(clip.sizeBytes)}</span>
               <span className="inline-flex items-center gap-1">{clip.hasSound ? <Volume2 className="h-3 w-3" aria-hidden /> : <VolumeX className="h-3 w-3" aria-hidden />}{clip.hasSound ? 'Has sound' : 'Almost silent'}</span>
             </div>
