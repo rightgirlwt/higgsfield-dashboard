@@ -20,9 +20,11 @@ import { studio } from './routes/studio';
 import { workflows } from './routes/workflows';
 import { edit } from './routes/edit';
 import { resultPath, sourcePath } from './services/effects';
-import { sourceLinkValid, vaultLinkValid } from './services/sourceLinks';
+import { sourceLinkValid, studyLinkValid, vaultLinkValid } from './services/sourceLinks';
 import { clipFile } from './services/vault';
+import { studyFile } from './services/study';
 import { vault } from './routes/vault';
+import { study } from './routes/study';
 import { attachWorkspace, listWorkspaces } from './services/workspaces';
 
 export function createApp() {
@@ -92,6 +94,16 @@ export function createApp() {
     }),
   );
 
+  // A Study Session reference video, played in Study Session. Same idea again.
+  api.get(
+    '/study/video/:id',
+    wrap(async (req, res, next) => {
+      if (!studyLinkValid(req.params.id, req.query.exp, req.query.sig)) return next(new HttpError(403, 'This link has expired. Reload the page.', 'forbidden'));
+      const file = await studyFile(req.params.id);
+      res.sendFile(file, { dotfiles: 'allow' }, (err) => err && !res.headersSent && next(new HttpError(404, 'Not found', 'not_found')));
+    }),
+  );
+
   // ---- authenticated ---------------------------------------------------------------------------
   api.use(authenticate, writesRequireUser, attachWorkspace);
   api.get('/me', (req, res) => res.json({ ...req.user, authProvider: config.authProvider }));
@@ -118,6 +130,7 @@ export function createApp() {
   api.use('/studio', studio);
   api.use('/edit', edit);
   api.use('/vault', vault);
+  api.use('/study', study);
   api.use('/projects', projects);
   api.use('/monitoring', monitoring);
   api.use('/settings', settings);

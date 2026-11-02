@@ -21,6 +21,14 @@ export function signVaultLink(id: string, now = Date.now()): string {
   return `/api/vault/clip/${id}?exp=${exp}&sig=${sign(`vault:${id}`, exp)}`;
 }
 
+/** And for a Study Session reference video. */
+export function signStudyLink(id: string, now = Date.now()): string {
+  const exp = now + TTL_MS;
+  return `/api/study/video/${id}?exp=${exp}&sig=${sign(`study:${id}`, exp)}`;
+}
+
+export const studyLinkValid = (id: string, exp: unknown, sig: unknown, now = Date.now()) => sourceLinkValid(`study:${id}`, exp, sig, now);
+
 export function vaultLinkValid(id: string, exp: unknown, sig: unknown, now = Date.now()): boolean {
   return sourceLinkValid(`vault:${id}`, exp, sig, now);
 }

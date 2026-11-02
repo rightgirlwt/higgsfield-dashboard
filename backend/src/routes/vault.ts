@@ -4,6 +4,7 @@ import { requireRole } from '../auth';
 import { HttpError, notFound, wrap } from '../lib/errors';
 import { reelToEdit } from '../services/brollPlan';
 import { signVaultLink } from '../services/sourceLinks';
+import { playbookFor } from '../services/study';
 import { MAX_UPLOAD_BYTES } from '../services/effects';
 import {
   clipExists, clipPatch, deleteClip, deleteReel, getVaultJob, lastMove, listClips, listDays, listReels, organizeFiles, saveVaultUpload, scanFolder, setReelStatus, sortClips, suggestReels, undoMove, updateClip, UPLOAD_TYPES, VAULT_FOLDERS, vaultStats,
@@ -152,8 +153,10 @@ vault.get(
 vault.post(
   '/reels/suggest',
   wrap(async (req, res) => {
-    const b = z.object({ approved: z.boolean().default(false), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), count: z.number().int().min(1).max(8).default(5) }).parse(req.body ?? {});
-    res.json(await suggestReels(req.user!.orgId, req.workspace!, b));
+    const b = z.object({ approved: z.boolean().default(false), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), count: z.number().int().min(1).max(8).default(5), studyIds: z.array(z.string().uuid()).max(3).default([]) }).parse(req.body ?? {});
+    // Model the reels on videos she studied in Study Session, if she picked any
+    const playbook = b.studyIds.length ? await playbookFor(req.user!.orgId, req.workspace!, b.studyIds) : undefined;
+    res.json(await suggestReels(req.user!.orgId, req.workspace!, { approved: b.approved, day: b.day, count: b.count, playbook }));
   }),
 );
 

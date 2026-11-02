@@ -42,6 +42,8 @@ export const config = {
   editDir: env.EDIT_DIR ?? './.data/edit',
   /** The Content Vault: clips uploaded to it, and a thumbnail for every clip it knows about. */
   vaultDir: env.VAULT_DIR ?? './.data/vault',
+  /** Study Session: the reference videos uploaded to be analysed, and a poster picture for each. */
+  studyDir: env.STUDY_DIR ?? './.data/study',
   /** Fonts the team adds for captions (.ttf or .otf). Kept in the project so everyone who pulls has them. */
   fontsDir: env.FONTS_DIR ?? path.resolve(process.cwd(), '..', 'fonts'),
 

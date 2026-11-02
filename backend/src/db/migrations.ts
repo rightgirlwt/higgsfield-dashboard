@@ -373,6 +373,43 @@ CREATE INDEX vault_reels_idx ON vault_reels(org_id, created_at DESC);
 ALTER TABLE vault_clips ADD COLUMN kind text NOT NULL DEFAULT 'video' CHECK (kind IN ('video','photo'));
 `,
   },
+  {
+    version: 8,
+    name: 'study_session',
+    // Study Session: reference videos Claude has been asked to analyse (the analysis and the scripts written from it are kept
+    // with the video), and which studies a Vault reel idea was modelled on.
+    sql: `
+CREATE TABLE study_refs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  title text NOT NULL,
+  name text NOT NULL,
+  path text NOT NULL,
+  source_url text NOT NULL DEFAULT '',
+  note text NOT NULL DEFAULT '',
+  size_bytes bigint NOT NULL DEFAULT 0,
+  duration_sec double precision,
+  width integer,
+  height integer,
+  fingerprint text NOT NULL DEFAULT '',
+  cuts jsonb NOT NULL DEFAULT '[]'::jsonb,
+  transcript text,
+  analysis jsonb,
+  scripts jsonb NOT NULL DEFAULT '[]'::jsonb,
+  cost_usd double precision NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX study_refs_idx ON study_refs(org_id, created_at DESC);
+ALTER TABLE vault_reels ADD COLUMN modeled_on text[] NOT NULL DEFAULT '{}';
+`,
+  },
+  {
+    version: 9,
+    name: 'study_links',
+    // A reference reel opened from a link keeps its caption and the public numbers it had when it was fetched.
+    sql: `ALTER TABLE study_refs ADD COLUMN meta jsonb NOT NULL DEFAULT '{}'::jsonb;`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {
@@ -401,3 +438,4 @@ export function splitSql(sql: string): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
 }
+

@@ -7,6 +7,7 @@ import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, 
 import { api, errorMessage } from '../lib/api';
 import { usd } from '../lib/format';
 import { useApi, useDebounced, useDocumentTitle } from '../lib/hooks';
+import type { Study } from '../lib/study';
 import { useJob, type Clip, type Job, type Stats } from '../lib/vault';
 import { useToast } from '../state/Toast';
 
@@ -29,6 +30,7 @@ interface Reel {
   caption: string;
   why: string;
   status: 'idea' | 'saved' | 'used';
+  modeledOn: string[];
   beats: { clipId: string; line: string; seconds: number; clip: Clip | null }[];
 }
 interface ReelQuote {
@@ -565,11 +567,17 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
   const [sending, setSending] = useState<Reel | null>(null);
   const [quote, setQuote] = useState<ReelQuote | null>(null);
   const [busy, setBusy] = useState(false);
+  // Reels studied in Study Session, which the plan can be modelled on (up to 3)
+  const studies = useApi<Study[]>('/study');
+  const studied = (studies.data ?? []).filter((s) => s.analysis);
+  const [modelOn, setModelOn] = useState<string[]>([]);
+  const studyIds = modelOn.filter((id) => studied.some((s) => s.id === id));
+  const toggleStudy = (id: string) => (setModelOn((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id].slice(-3))), setQuote(null));
 
   async function ask() {
     setBusy(true);
     try {
-      setQuote(await api.post<ReelQuote>('/vault/reels/suggest', { approved: false, count, ...(planDay ? { day: planDay } : {}) }));
+      setQuote(await api.post<ReelQuote>('/vault/reels/suggest', { approved: false, count, studyIds, ...(planDay ? { day: planDay } : {}) }));
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -578,7 +586,7 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
   async function approve() {
     setBusy(true);
     try {
-      const r = await api.post<{ costUsd: number; reels: Reel[] }>('/vault/reels/suggest', { approved: true, count, ...(planDay ? { day: planDay } : {}) });
+      const r = await api.post<{ costUsd: number; reels: Reel[] }>('/vault/reels/suggest', { approved: true, count, studyIds, ...(planDay ? { day: planDay } : {}) });
       setQuote(null);
       toast.success(`${r.reels.length} reel idea${r.reels.length === 1 ? '' : 's'} added for ${usd(r.costUsd)}.`);
       reload();
@@ -628,6 +636,19 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
               <Button onClick={() => void ask()} loading={busy && !quote}>See the price</Button>
             </div>
           )}
+          {sorted >= 3 && studied.length > 0 && (
+            <fieldset className="mt-3">
+              <legend className="text-xs font-medium text-slate-400">Model them on (optional, up to 3 reels you studied)</legend>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {studied.map((s) => (
+                  <label key={s.id} className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1 text-xs ${studyIds.includes(s.id) ? 'border-cyan-500/60 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                    <input type="checkbox" className="accent-cyan-400" checked={studyIds.includes(s.id)} onChange={() => toggleStudy(s.id)} />
+                    {s.title}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           {quote && (
             <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm" role="status">
               <p>
@@ -657,6 +678,7 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={r.style === 'vlog' ? 'violet' : 'cyan'}>{r.style === 'vlog' ? `Vlog${r.day ? ` · ${dayText(r.day)}` : ''}` : 'Topic'}</Badge>
                   {r.status !== 'idea' && <Badge tone={r.status === 'used' ? 'emerald' : 'amber'}>{r.status === 'used' ? 'Used' : 'Saved'}</Badge>}
+                  {r.modeledOn?.length > 0 && <span className="text-xs text-slate-500">Modeled on {r.modeledOn.join(', ')}</span>}
                 </div>
                 <h3 className="mt-1.5 text-lg font-semibold">{r.title}</h3>
                 {r.hook && <p className="mt-1 text-sm text-slate-300">Hook: “{r.hook}”</p>}

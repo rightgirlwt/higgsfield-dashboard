@@ -219,7 +219,7 @@ async function loudness(file: string): Promise<number | null> {
 }
 
 /** The same file found twice: its size plus its first and last 64 KB. */
-async function fingerprint(file: string, size: number): Promise<string> {
+export async function fingerprint(file: string, size: number): Promise<string> {
   const h = crypto.createHash('sha1').update(String(size));
   const fh = await fs.open(file, 'r');
   try {
@@ -235,7 +235,7 @@ async function fingerprint(file: string, size: number): Promise<string> {
 }
 
 /** A JPEG of the clip at a fraction of its length, no bigger than `box` pixels either way. */
-async function frameAt(file: string, durationSec: number | null, fraction: number, box: number): Promise<Buffer> {
+export async function frameAt(file: string, durationSec: number | null, fraction: number, box: number): Promise<Buffer> {
   // A photo has no length and nothing to seek to (seeking in a one-picture JPEG gives no picture at all).
   const seek = durationSec ? ['-ss', Math.max(0, durationSec * fraction).toFixed(2)] : [];
   const { stdout } = await run('ffmpeg', ['-v', 'error', ...seek, '-i', file, '-frames:v', '1', '-vf', `scale=${box}:${box}:force_original_aspect_ratio=decrease`, '-q:v', '5', '-f', 'mjpeg', '-'], { timeoutMs: 60_000 });
@@ -869,7 +869,7 @@ const REEL_SYSTEM = (voice: string, count: number) =>
   `Voice: ${voice} ` +
   `Return ${count} reels at most. Answer with only a JSON array of {"title","style":"vlog"|"topic","day":"YYYY-MM-DD" for vlog or null,"hook","beats":[{"clip","line","seconds"}],"caption","why"}, where "why" is one sentence on why it should work.`;
 
-const voiceFor = (ws: Workspace) => (/greene|glg/i.test(ws.name) ? VOICES.glg : VOICES.rgm);
+export const voiceFor = (ws: Workspace) => (/greene|glg/i.test(ws.name) ? VOICES.glg : VOICES.rgm);
 
 /** The sorted clips as lines Claude can read (c1, c2, ...), grouped by the day they were filmed, newest first. */
 export async function catalogFor(orgId: string, ws: Workspace, day?: string) {
@@ -908,14 +908,16 @@ export interface ReelRow {
   caption: string;
   why: string;
   status: 'idea' | 'saved' | 'used';
+  modeled_on: string[];
   created_at: string | Date;
 }
 
 /** Free to call: says how many clips Claude would look at and what planning the reels would cost. Nothing is spent until `approved`. */
-export async function suggestReels(orgId: string, ws: Workspace, o: { approved: boolean; day?: string; count: number }) {
+export async function suggestReels(orgId: string, ws: Workspace, o: { approved: boolean; day?: string; count: number; playbook?: { titles: string[]; text: string } }) {
   const { catalog, text, days } = await catalogFor(orgId, ws, o.day);
   if (catalog.length < 3) throw badRequest(o.day ? 'That day has fewer than 3 sorted clips.' : 'Sort at least 3 clips first, so Claude has footage to plan from.');
-  const system = REEL_SYSTEM(voiceFor(ws), o.count);
+  // Reels she studied in Study Session: borrow how they are built, never their words or their subject.
+  const system = REEL_SYSTEM(voiceFor(ws), o.count) + (o.playbook ? `\n\nModel the structure on what she studied. Borrow the hook technique, the pacing and the order of beats, never the wording or the subject. Her notes on the reels she studied:\n${o.playbook.text}` : '');
   const user = `Footage (id | time | length | folder | tags | what happens):\n\n${text}`;
   const inputTokens = estimateTokens(system + user);
   const maxOut = o.count * 450 + 200;
@@ -931,8 +933,8 @@ export async function suggestReels(orgId: string, ws: Workspace, o: { approved: 
   const saved: ReelRow[] = [];
   for (const i of ideas) {
     const { rows } = await getDb().query<ReelRow>(
-      `INSERT INTO vault_reels (org_id, workspace_id, title, style, day, hook, beats, caption, why) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9) RETURNING *, day::text AS day`,
-      [orgId, ws.id, i.title, i.style, i.day, i.hook, JSON.stringify(i.beats), i.caption, i.why],
+      `INSERT INTO vault_reels (org_id, workspace_id, title, style, day, hook, beats, caption, why, modeled_on) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10) RETURNING *, day::text AS day`,
+      [orgId, ws.id, i.title, i.style, i.day, i.hook, JSON.stringify(i.beats), i.caption, i.why, o.playbook?.titles ?? []],
     );
     saved.push(rows[0]);
   }
@@ -956,6 +958,7 @@ async function withClips(orgId: string, reels: ReelRow[]) {
     caption: r.caption,
     why: r.why,
     status: r.status,
+    modeledOn: r.modeled_on ?? [],
     createdAt: new Date(r.created_at).toISOString(),
     beats: r.beats.map((b) => ({ ...b, clip: clips.get(b.clipId) ?? null })),
   }));
