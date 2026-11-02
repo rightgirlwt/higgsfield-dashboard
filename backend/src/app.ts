@@ -25,6 +25,7 @@ import { clipFile } from './services/vault';
 import { studyFile } from './services/study';
 import { vault } from './routes/vault';
 import { study } from './routes/study';
+import { metrics } from './routes/metrics';
 import { attachWorkspace, listWorkspaces } from './services/workspaces';
 
 export function createApp() {
@@ -131,6 +132,7 @@ export function createApp() {
   api.use('/edit', edit);
   api.use('/vault', vault);
   api.use('/study', study);
+  api.use('/metrics', metrics);
   api.use('/projects', projects);
   api.use('/monitoring', monitoring);
   api.use('/settings', settings);

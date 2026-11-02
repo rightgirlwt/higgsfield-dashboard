@@ -44,6 +44,8 @@ export const config = {
   vaultDir: env.VAULT_DIR ?? './.data/vault',
   /** Study Session: the reference videos uploaded to be analysed, and a poster picture for each. */
   studyDir: env.STUDY_DIR ?? './.data/study',
+  /** Instagram's API for accounts that connect with an Instagram token (Metrics). Overridden in tests. */
+  instagramGraphBase: env.INSTAGRAM_GRAPH_BASE ?? 'https://graph.instagram.com',
   /** Fonts the team adds for captions (.ttf or .otf). Kept in the project so everyone who pulls has them. */
   fontsDir: env.FONTS_DIR ?? path.resolve(process.cwd(), '..', 'fonts'),
 

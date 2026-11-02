@@ -410,6 +410,65 @@ ALTER TABLE vault_reels ADD COLUMN modeled_on text[] NOT NULL DEFAULT '{}';
     // A reference reel opened from a link keeps its caption and the public numbers it had when it was fetched.
     sql: `ALTER TABLE study_refs ADD COLUMN meta jsonb NOT NULL DEFAULT '{}'::jsonb;`,
   },
+  {
+    version: 10,
+    name: 'metrics_instagram',
+    // Metrics: Instagram accounts connected with their own token (kept encrypted), the posts read from them, a snapshot of each
+    // post's numbers every time it is synced (so growth can be drawn), and one row a day per account for followers and reach.
+    sql: `
+CREATE TABLE ig_accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  ig_user_id text NOT NULL,
+  username text NOT NULL,
+  name text NOT NULL DEFAULT '',
+  picture text NOT NULL DEFAULT '',
+  followers integer,
+  follows integer,
+  media_count integer,
+  token_cipher text NOT NULL,
+  token_last4 text NOT NULL DEFAULT '',
+  token_expires_at timestamptz,
+  last_synced_at timestamptz,
+  last_error text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (org_id, ig_user_id)
+);
+
+CREATE TABLE ig_posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL REFERENCES ig_accounts(id) ON DELETE CASCADE,
+  media_id text NOT NULL,
+  permalink text NOT NULL DEFAULT '',
+  caption text NOT NULL DEFAULT '',
+  media_type text NOT NULL DEFAULT '',
+  product_type text NOT NULL DEFAULT '',
+  thumb_url text NOT NULL DEFAULT '',
+  posted_at timestamptz,
+  metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+  synced_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, media_id)
+);
+CREATE INDEX ig_posts_idx ON ig_posts(account_id, posted_at DESC);
+
+CREATE TABLE ig_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id uuid NOT NULL REFERENCES ig_posts(id) ON DELETE CASCADE,
+  taken_at timestamptz NOT NULL DEFAULT now(),
+  metrics jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX ig_snapshots_idx ON ig_snapshots(post_id, taken_at);
+
+CREATE TABLE ig_account_days (
+  account_id uuid NOT NULL REFERENCES ig_accounts(id) ON DELETE CASCADE,
+  day date NOT NULL,
+  followers integer,
+  reach integer,
+  PRIMARY KEY (account_id, day)
+);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

@@ -13,6 +13,7 @@ const Voices = lazy(() => import('./pages/Voices'));
 const Edit = lazy(() => import('./pages/Edit'));
 const Vault = lazy(() => import('./pages/Vault'));
 const StudySession = lazy(() => import('./pages/Study'));
+const Metrics = lazy(() => import('./pages/Metrics'));
 const Projects = lazy(() => import('./pages/Projects'));
 const Project = lazy(() => import('./pages/Project'));
 const PromptStudio = lazy(() => import('./pages/PromptStudio'));
@@ -69,6 +70,7 @@ export default function App() {
                     <Route path="edit" element={<Edit />} />
                     <Route path="vault" element={<Vault />} />
                     <Route path="study" element={<StudySession />} />
+                    <Route path="metrics" element={<Metrics />} />
                     <Route path="prompts"element={<PromptStudio />} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="workflows/:id" element={<WorkflowBuilder />} />

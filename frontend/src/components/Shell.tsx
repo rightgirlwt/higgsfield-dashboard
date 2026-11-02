@@ -1,4 +1,4 @@
-import { Activity, Bell, Camera, Clapperboard, FolderOpen, GraduationCap, LayoutGrid, LogOut, Menu, MessageSquareText, Mic, Moon, Search, Settings, Sparkles, Sun, Wand2, Workflow, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, Camera, Clapperboard, FolderOpen, GraduationCap, LayoutGrid, LogOut, Menu, MessageSquareText, Mic, Moon, Search, Settings, Sparkles, Sun, Wand2, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/context';
@@ -18,6 +18,7 @@ const nav = [
   { to: '/voices', label: 'Voices', icon: Mic },
   { to: '/vault', label: 'Vault', icon: FolderOpen },
   { to: '/study', label: 'Study', icon: GraduationCap },
+  { to: '/metrics', label: 'Metrics', icon: BarChart3 },
   { to: '/edit', label: 'Editing', icon: Wand2 },
   { to: '/prompts', label: 'Prompts', icon: MessageSquareText },
   { to: '/workflows', label: 'Workflows', icon: Workflow },
