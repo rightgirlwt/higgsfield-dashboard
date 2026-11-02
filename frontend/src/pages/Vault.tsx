@@ -1,61 +1,24 @@
-import { Calendar, Copy, Film, FolderOpen, Layers, Search, Sparkles, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
+import { Calendar, Copy, Film, FolderInput, FolderOpen, Image as ImageIcon, Layers, Search, Sparkles, Trash2, Undo2, Upload, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCan } from '../auth/context';
+import { SortStage } from '../components/SortStage';
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, Modal, PageHeader, ProgressBar, Select, Skeleton, Tabs } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
 import { usd } from '../lib/format';
 import { useApi, useDebounced, useDocumentTitle } from '../lib/hooks';
+import { useJob, type Clip, type Job, type Stats } from '../lib/vault';
 import { useToast } from '../state/Toast';
 
-interface Clip {
-  id: string;
-  name: string;
-  source: 'folder' | 'upload';
-  sizeBytes: number;
-  durationSec: number | null;
-  width: number | null;
-  height: number | null;
-  shotAt: string;
-  shotDate: string;
-  hasSound: boolean;
-  duplicateOf: string | null;
-  folder: string;
-  tags: string[];
-  description: string;
-  sorted: boolean;
-  thumb: string;
-}
-interface Stats {
-  clips: number;
-  duplicates: number;
-  unsorted: number;
-  days: number;
-  seconds: number;
-  folders: { folder: string; n: number }[];
-  folderNames: string[];
-}
 interface Day {
   day: string;
   clips: number;
+  videos: number;
   seconds: number;
   first: string;
   last: string;
   folders: string[];
   thumbs: string[];
-}
-interface Job {
-  id: string;
-  kind: 'scan' | 'sort';
-  state: 'running' | 'done' | 'error';
-  total: number;
-  done: number;
-  added: number;
-  duplicates: number;
-  failed: number;
-  costUsd: number;
-  note: string;
-  error: string;
 }
 interface Reel {
   id: string;
@@ -80,40 +43,12 @@ interface ReelQuote {
 
 type TabId = 'clips' | 'days' | 'reels';
 const PAGE = 36;
-const TYPES: Record<string, string> = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm' };
+const TYPES: Record<string, string> = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic' };
 
 const mmss = (s: number | null) => (s === null ? '' : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
 const dayText = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
 const timeText = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 const mb = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
-
-/** Follows a scan or sort until it finishes, then says so. */
-function useJob(jobId: string | null, onFinish: (job: Job) => void) {
-  const [job, setJob] = useState<Job | null>(null);
-  const finish = useRef(onFinish);
-  finish.current = onFinish;
-  useEffect(() => {
-    if (!jobId) return;
-    let stop = false;
-    const tick = async () => {
-      try {
-        const j = await api.get<Job>(`/vault/jobs/${jobId}`);
-        if (stop) return;
-        setJob(j);
-        if (j.state !== 'running') return finish.current(j);
-      } catch {
-        if (stop) return;
-        return finish.current({ id: jobId, kind: 'scan', state: 'error', total: 0, done: 0, added: 0, duplicates: 0, failed: 0, costUsd: 0, note: '', error: 'Lost track of this job (did the server restart?).' });
-      }
-      setTimeout(tick, 1000);
-    };
-    void tick();
-    return () => {
-      stop = true;
-    };
-  }, [jobId]);
-  return jobId ? job : null;
-}
 
 export default function Vault() {
   useDocumentTitle('Content Vault');
@@ -126,6 +61,8 @@ export default function Vault() {
   const [tab, setTab] = useState<TabId>('clips');
   const [folder, setFolder] = useState('');
   const [view, setView] = useState<'' | 'unsorted' | 'duplicates'>('');
+  const [kind, setKind] = useState<'' | 'video' | 'photo'>('');
+  const [staging, setStaging] = useState(false);
   const [day, setDay] = useState('');
   const [search, setSearch] = useState('');
   const q = useDebounced(search);
@@ -142,12 +79,13 @@ export default function Vault() {
   const query = useMemo(() => {
     const p = new URLSearchParams();
     if (folder) p.set('folder', folder);
+    if (kind) p.set('kind', kind);
     if (day) p.set('day', day);
     if (q.trim()) p.set('q', q.trim());
     if (view === 'unsorted') p.set('unsorted', '1');
     if (view === 'duplicates') p.set('duplicates', 'only');
     return p.toString();
-  }, [folder, day, q, view]);
+  }, [folder, kind, day, q, view]);
 
   const [items, setItems] = useState<Clip[]>([]);
   const [total, setTotal] = useState(0);
@@ -178,7 +116,8 @@ export default function Vault() {
       <PageHeader eyebrow="Footage, sorted" title="Content Vault" />
       <StatStrip stats={stats.data} />
       {canWrite && <AddFootage isAdmin={isAdmin} onDone={refresh} />}
-      {canWrite && stats.data && stats.data.unsorted > 0 && <SortCard unsorted={stats.data.unsorted} onDone={refresh} />}
+      {canWrite && stats.data && (staging || stats.data.unsorted > 0) && <SortStage stats={stats.data} onDone={refresh} onActive={setStaging} />}
+      {isAdmin && stats.data && stats.data.clips - stats.data.unsorted > 0 && <OrganizeCard onDone={refresh} />}
 
       <div className="mt-6">
         <Tabs<TabId>
@@ -202,20 +141,26 @@ export default function Vault() {
       {tab === 'clips' && !empty && (
         <section className="mt-4" aria-label="Clips">
           <div className="flex flex-wrap items-center gap-2">
-            <Chip active={!folder && !view} onClick={() => (setFolder(''), setView(''))}>All {stats.data ? `Â· ${stats.data.clips}` : ''}</Chip>
+            <Chip active={!folder && !view && !kind} onClick={() => (setFolder(''), setView(''), setKind(''))}>All {stats.data ? `· ${stats.data.clips}` : ''}</Chip>
+            {!!stats.data?.videos && !!stats.data.photos && (
+              <>
+                <Chip active={kind === 'video'} onClick={() => setKind(kind === 'video' ? '' : 'video')}>Videos · {stats.data.videos}</Chip>
+                <Chip active={kind === 'photo'} onClick={() => setKind(kind === 'photo' ? '' : 'photo')}>Photos · {stats.data.photos}</Chip>
+              </>
+            )}
             {folders.map((f) => (
               <Chip key={f.folder} active={folder === f.folder} onClick={() => (setFolder(f.folder), setView(''))}>
-                {f.folder} Â· {f.n}
+                {f.folder} · {f.n}
               </Chip>
             ))}
             {!!stats.data?.unsorted && (
               <Chip active={view === 'unsorted'} onClick={() => (setView('unsorted'), setFolder(''))}>
-                Not sorted Â· {stats.data.unsorted}
+                Not sorted · {stats.data.unsorted}
               </Chip>
             )}
             {!!stats.data?.duplicates && (
               <Chip active={view === 'duplicates'} onClick={() => (setView('duplicates'), setFolder(''))}>
-                Duplicates Â· {stats.data.duplicates}
+                Duplicates · {stats.data.duplicates}
               </Chip>
             )}
           </div>
@@ -226,7 +171,7 @@ export default function Vault() {
             </div>
             {day && (
               <button onClick={() => setDay('')} className="inline-flex items-center gap-1 rounded-full bg-cyan-500/15 px-3 py-1 text-xs text-cyan-300 hover:bg-cyan-500/25">
-                <Calendar className="h-3 w-3" aria-hidden /> {dayText(day)} âœ•
+                <Calendar className="h-3 w-3" aria-hidden /> {dayText(day)} ✕
               </button>
             )}
             <span className="text-xs text-slate-500">{loading && items.length === 0 ? '' : `${total} clip${total === 1 ? '' : 's'}`}</span>
@@ -271,7 +216,7 @@ export default function Vault() {
         />
       )}
 
-      {tab === 'reels' && !empty && <Reels reels={reels.data} days={days.data ?? []} canWrite={canWrite} planDay={planDay} setPlanDay={setPlanDay} unsorted={stats.data?.unsorted ?? 0} sorted={(stats.data?.clips ?? 0) - (stats.data?.unsorted ?? 0)} reload={reels.reload} onOpenClip={setOpen} />}
+      {tab === 'reels' && !empty && <Reels reels={reels.data} days={days.data ?? []} canWrite={canWrite} planDay={planDay} setPlanDay={setPlanDay} unsorted={stats.data?.unsorted ?? 0} sorted={stats.data?.sortedVideos ?? 0} reload={reels.reload} onOpenClip={setOpen} />}
 
       <ClipModal
         clip={open}
@@ -291,17 +236,18 @@ export default function Vault() {
 
 function StatStrip({ stats }: { stats: Stats | null }) {
   const cells = [
-    { label: 'Clips found', value: stats ? stats.clips : null },
+    { label: 'Files found', value: stats ? stats.clips : null, sub: stats && stats.photos > 0 ? `${stats.videos} video${stats.videos === 1 ? '' : 's'}, ${stats.photos} photo${stats.photos === 1 ? '' : 's'}` : '' },
     { label: 'Folders created', value: stats ? stats.folders.length : null },
     { label: 'Days filmed', value: stats ? stats.days : null },
     { label: 'Duplicates caught', value: stats ? stats.duplicates : null },
-  ];
+  ] as { label: string; value: number | null; sub?: string }[];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Vault totals">
       {cells.map((c) => (
         <Card key={c.label} className="p-4">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{c.label}</div>
           <div className="mt-1 text-3xl font-semibold tabular-nums">{c.value === null ? <Skeleton className="h-9 w-16" /> : c.value}</div>
+          {c.sub && <div className="mt-0.5 text-[11px] text-slate-500">{c.sub}</div>}
         </Card>
       ))}
     </div>
@@ -334,6 +280,11 @@ function AddFootage({ isAdmin, onDone }: { isAdmin: boolean; onDone: () => void 
     setStarting(true);
     try {
       const j = await api.post<Job>('/vault/scan', { folder });
+      try {
+        localStorage.setItem('vault.lastFolder', folder.trim());
+      } catch {
+        /* remembering the folder is a convenience only */
+      }
       if (j.total === 0) toast.success(`Nothing new: ${j.note}`);
       else setJobId(j.id);
     } catch (e) {
@@ -365,12 +316,12 @@ function AddFootage({ isAdmin, onDone }: { isAdmin: boolean; onDone: () => void 
   const busy = !!jobId || !!uploading;
   return (
     <Card className="mt-4 p-4">
-      <CardHeader eyebrow="Free" title="Add footage" />
+      <CardHeader eyebrow="Free" title="Add photos and videos" />
       <div className="mt-3 grid gap-4 lg:grid-cols-2">
         {isAdmin && (
           <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => (e.preventDefault(), folder.trim() && !busy && void scan())}>
             <div className="min-w-60 flex-1">
-              <Field label="A folder on this computer" hint="Reads every video inside it, and the folders inside that. Your files stay where they are.">
+              <Field label="A folder on this computer" hint="Reads every photo and video inside it, and the folders inside that. Your files stay where they are.">
                 <Input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="C:\Users\you\Videos\Camera Roll" />
               </Field>
             </div>
@@ -380,24 +331,24 @@ function AddFootage({ isAdmin, onDone }: { isAdmin: boolean; onDone: () => void 
           </form>
         )}
         <div className="flex flex-wrap items-end gap-2">
-          <input ref={picker} type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" multiple hidden onChange={(e) => (e.target.files?.length && void upload([...e.target.files]), (e.target.value = ''))} />
+          <input ref={picker} type="file" accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp,image/heic,.mp4,.mov,.m4v,.webm,.jpg,.jpeg,.png,.webp,.heic" multiple hidden onChange={(e) => (e.target.files?.length && void upload([...e.target.files]), (e.target.value = ''))} />
           <Button onClick={() => picker.current?.click()} disabled={busy}>
-            <Upload className="h-4 w-4" aria-hidden /> Upload clips
+            <Upload className="h-4 w-4" aria-hidden /> Upload files
           </Button>
-          <span className="pb-2 text-xs text-slate-500">MP4, MOV or WebM, up to 500 MB each. Several at once is fine.</span>
+          <span className="pb-2 text-xs text-slate-500">Videos (MP4, MOV, WebM) or photos (JPG, PNG, WebP, HEIC), up to 500 MB each. Several at once is fine.</span>
         </div>
       </div>
       {job && (
         <div className="mt-4" aria-live="polite">
           <div className="mb-1 text-xs text-slate-400">
-            Reading clips: {job.done} of {job.total} {job.note && <span className="text-slate-500">Â· {job.note}</span>}
+            Reading clips: {job.done} of {job.total} {job.note && <span className="text-slate-500">· {job.note}</span>}
           </div>
           <ProgressBar value={job.total ? (job.done / job.total) * 100 : 0} label="Reading clips" />
         </div>
       )}
       {uploading && (
         <div className="mt-4 text-xs text-slate-400" aria-live="polite">
-          Uploading clip {uploading.at} of {uploading.of}â€¦
+          Uploading clip {uploading.at} of {uploading.of}…
           <div className="mt-1">
             <ProgressBar value={((uploading.at - 1) / uploading.of) * 100} label="Uploading" />
           </div>
@@ -407,142 +358,166 @@ function AddFootage({ isAdmin, onDone }: { isAdmin: boolean; onDone: () => void 
   );
 }
 
+interface OrganizeQuote {
+  approved: false;
+  destRoot: string;
+  mode: 'copy' | 'move';
+  files: number;
+  photos: number;
+  videos: number;
+  folders: { folder: string; n: number }[];
+  skippedUnsorted: number;
+  skippedDuplicates: number;
+}
+interface LastMove {
+  id: string;
+  files: number;
+  destRoot: string;
+  createdAt: string;
+}
+
+const LAST_FOLDER_KEY = 'vault.lastFolder';
+const savedFolder = () => {
+  try {
+    return localStorage.getItem(LAST_FOLDER_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
+
 /**
- * The unsorted footage as a dense ball of small, white-bordered thumbnails tilted at every angle, packed in a sunflower spiral.
- * A ball needs a lot of tiles to read as a ball, so a small Vault repeats its thumbnails; the real count is in the heading.
+ * Makes the sorting real on this computer: Photos and Videos folders, a folder per topic inside each, the sorted files placed in them.
+ * It shows exactly what will happen first, copies by default so the originals stay put, and a move can be undone.
  */
-function ClipBall({ thumbs, total }: { thumbs: string[]; total: number }) {
-  const tiles = 130;
-  const size = 300;
-  const radius = size / 2 - 20;
-  const s = Math.sqrt((2.4 * Math.PI * radius * radius) / tiles);
-  return (
-    <div className="relative mx-auto shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${total} clips waiting to be sorted`}>
-      {Array.from({ length: tiles }, (_, i) => {
-        const r = radius * Math.sqrt((i + 0.5) / tiles) + (((i * 53) % 7) - 3);
-        const a = i * 2.39996;
-        return (
-          <img
-            key={i}
-            src={thumbs[i % thumbs.length]}
-            alt=""
-            className="absolute rounded-[3px] border-[1.5px] border-[#fdf8f3] object-cover shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
-            style={{ width: s, height: s * 0.85, left: size / 2 + r * Math.cos(a) - s / 2, top: size / 2 + r * Math.sin(a) - (s * 0.85) / 2, transform: `rotate(${(i * 137.5) % 360}deg)`, zIndex: (i * 7) % tiles }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-const FEATURED = ['Desk', 'Studio', 'Talking head', 'Close-ups'];
-
-/** The folders clips land in: empty slots at first, filling with thumbnails as sorting runs. */
-function FolderBoxes({ active }: { active: boolean }) {
-  const [boxes, setBoxes] = useState<{ folder: string; n: number; thumbs: string[] }[]>(FEATURED.map((folder) => ({ folder, n: 0, thumbs: [] })));
-  useEffect(() => {
-    let stop = false;
-    const pull = async () => {
-      try {
-        const s = await api.get<Stats>('/vault/stats');
-        const names = [...FEATURED, ...s.folders.map((f) => f.folder).filter((f) => !FEATURED.includes(f))];
-        const next = await Promise.all(
-          names.map(async (folder) => {
-            const n = s.folders.find((f) => f.folder === folder)?.n ?? 0;
-            const thumbs = n ? (await api.get<{ items: Clip[] }>(`/vault/clips?folder=${encodeURIComponent(folder)}&limit=12`)).items.map((c) => c.thumb) : [];
-            return { folder, n, thumbs };
-          }),
-        );
-        if (!stop) setBoxes(next);
-      } catch {
-        /* the next tick tries again */
-      }
-    };
-    void pull();
-    if (!active) return () => void (stop = true);
-    const t = setInterval(() => void pull(), 1500);
-    return () => {
-      stop = true;
-      clearInterval(t);
-    };
-  }, [active]);
-  return (
-    <div className="mt-5 grid gap-3 sm:grid-cols-2" aria-label="Folders">
-      {boxes.map((b) => (
-        <div key={b.folder} className="rounded-xl border border-slate-800 bg-slate-950/60 p-2.5">
-          <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="inline-flex items-center gap-1.5 font-medium text-slate-200"><FolderOpen className="h-3.5 w-3.5 text-amber-400" aria-hidden />{b.folder}</span>
-            <span className="tabular-nums text-slate-500">{b.n}</span>
-          </div>
-          <div className="grid grid-cols-6 gap-1">
-            {Array.from({ length: 12 }, (_, i) => (b.thumbs[i] ? <img key={i} src={b.thumbs[i]} alt="" className="aspect-[4/3] w-full rounded-[3px] object-cover" /> : <div key={i} className="aspect-[4/3] rounded-[3px] bg-slate-900" />))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SortCard({ unsorted, onDone }: { unsorted: number; onDone: () => void }) {
+function OrganizeCard({ onDone }: { onDone: () => void }) {
   const toast = useToast();
-  const waiting = useApi<{ items: Clip[] }>(`/vault/clips?unsorted=1&limit=100&n=${unsorted}`);
-  const thumbs = (waiting.data?.items ?? []).map((c) => c.thumb).filter(Boolean);
+  const [dest, setDest] = useState(() => {
+    const f = savedFolder();
+    return f ? `${f.replace(/[\\/]+$/, '')}\\Sorted` : '';
+  });
+  const [mode, setMode] = useState<'copy' | 'move'>('copy');
+  const [quote, setQuote] = useState<OrganizeQuote | null>(null);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const ran = useRef<'copy' | 'move'>('copy');
+  const last = useApi<LastMove | null>('/vault/organize/last');
   const job = useJob(jobId, (j) => {
     setJobId(null);
+    setQuote(null);
     if (j.state === 'error') toast.error(j.error);
-    else toast.success(`Sorted ${j.done - j.failed} clip${j.done - j.failed === 1 ? '' : 's'} for ${usd(j.costUsd)}${j.failed ? ` (${j.failed} could not be sorted)` : ''}.${j.note ? ' ' + j.note : ''}`);
+    else toast.success(`${j.added} file${j.added === 1 ? '' : 's'} ${ran.current === 'move' ? 'moved' : 'copied'}${j.failed ? `, ${j.failed} could not be ${ran.current === 'move' ? 'moved' : 'copied'}` : ''}.${j.note.includes('already') ? ' ' + j.note.slice(j.note.indexOf('(')) : ''}`);
+    last.reload();
     onDone();
   });
 
-  /** One click: the server still works out the most this run can cost and stops there. */
-  async function sort() {
+  async function look() {
     setBusy(true);
     try {
-      const q = await api.post<{ keyMissing: boolean }>('/vault/sort', { approved: false });
-      if (q.keyMissing) throw new Error('Add your Anthropic key in Settings first. Nothing has been spent.');
-      setJobId((await api.post<Job>('/vault/sort', { approved: true })).id);
+      setQuote(await api.post<OrganizeQuote>('/vault/organize', { destRoot: dest, mode, approved: false }));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    setBusy(false);
+  }
+  async function go() {
+    setBusy(true);
+    try {
+      ran.current = mode;
+      setJobId((await api.post<Job>('/vault/organize', { destRoot: dest, mode, approved: true })).id);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    setBusy(false);
+  }
+  async function undo(m: LastMove) {
+    setBusy(true);
+    try {
+      const r = await api.post<{ restored: number; skipped: number }>(`/vault/organize/${m.id}/undo`, {});
+      toast.success(`Put ${r.restored} file${r.restored === 1 ? '' : 's'} back${r.skipped ? ` (${r.skipped} had changed since, so they were left alone)` : ''}.`);
+      last.reload();
+      onDone();
     } catch (e) {
       toast.error(errorMessage(e));
     }
     setBusy(false);
   }
 
+  const verb = mode === 'move' ? 'Move' : 'Copy';
   return (
     <Card className="mt-4 p-4">
-      <div className="flex flex-wrap items-center gap-6">
-        {thumbs.length > 0 && <ClipBall thumbs={thumbs} total={unsorted} />}
-        <div className="min-w-60 flex-1">
-          <CardHeader eyebrow="A few cents in all" title={`${unsorted} clip${unsorted === 1 ? '' : 's'} not sorted yet`} />
-          <p className="mt-2 text-sm text-slate-400">Claude looks at three frames from each clip and files it in a folder (Talking head, Desk, Studio, Close-ups and so on), with tags and a one-line description. What it cost is shown when it finishes.</p>
-          {!job && (
-            <div className="mt-4">
-              <Button variant="primary" onClick={() => void sort()} loading={busy}>
-                <Sparkles className="h-4 w-4" aria-hidden /> Sort with Claude
+      <CardHeader eyebrow="Free to preview" title="Put them in folders on this computer" />
+      <p className="text-sm text-slate-400">Makes real folders (Photos and Videos, then one folder for each topic) and puts your sorted files in them. You see exactly what will happen before anything is touched.</p>
+      <form className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end" onSubmit={(e) => (e.preventDefault(), dest.trim() && !jobId && void look())}>
+        <Field label="Into this folder" hint="It is created if it does not exist. Only files read from a folder on this computer are used; uploads stay in the Vault.">
+          <Input value={dest} onChange={(e) => (setDest(e.target.value), setQuote(null))} placeholder="C:\Users\you\Pictures\Sorted" />
+        </Field>
+        <Button type="submit" variant="primary" loading={busy && !quote} disabled={!dest.trim() || !!jobId}>
+          <FolderInput className="h-4 w-4" aria-hidden /> See what will happen
+        </Button>
+      </form>
+      <fieldset className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm" disabled={!!jobId}>
+        <legend className="sr-only">Copy or move</legend>
+        <label className="inline-flex cursor-pointer items-center gap-2">
+          <input type="radio" name="organize-mode" checked={mode === 'copy'} onChange={() => (setMode('copy'), setQuote(null))} />
+          <span><strong className="font-medium text-slate-100">Copy</strong> <span className="text-slate-400">your originals stay where they are</span></span>
+        </label>
+        <label className="inline-flex cursor-pointer items-center gap-2">
+          <input type="radio" name="organize-mode" checked={mode === 'move'} onChange={() => (setMode('move'), setQuote(null))} />
+          <span><strong className="font-medium text-slate-100">Move</strong> <span className="text-slate-400">takes them out of their old folders; you can undo it</span></span>
+        </label>
+      </fieldset>
+      {quote && !jobId && (
+        <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm" role="status">
+          <p>
+            {verb === 'Move' ? 'Moving' : 'Copying'} <strong>{quote.files}</strong> file{quote.files === 1 ? '' : 's'} ({quote.photos} photo{quote.photos === 1 ? '' : 's'}, {quote.videos} video{quote.videos === 1 ? '' : 's'}) into <code className="rounded bg-slate-950 px-1.5 py-0.5 text-xs">{quote.destRoot}</code>, under <strong>Photos</strong> and <strong>Videos</strong>.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1">{quote.folders.map((f) => <Badge key={f.folder} tone="slate">{f.folder} · {f.n}</Badge>)}</div>
+          {(quote.skippedUnsorted > 0 || quote.skippedDuplicates > 0) && (
+            <p className="mt-2 text-xs text-slate-400">
+              Left alone: {quote.skippedUnsorted > 0 ? `${quote.skippedUnsorted} not sorted yet` : ''}{quote.skippedUnsorted > 0 && quote.skippedDuplicates > 0 ? ' and ' : ''}{quote.skippedDuplicates > 0 ? `${quote.skippedDuplicates} duplicate${quote.skippedDuplicates === 1 ? '' : 's'}` : ''}.
+            </p>
+          )}
+          {quote.mode === 'move' && <p className="mt-2 text-xs text-amber-200">The files leave their current folders. The Vault keeps track of the new places, and Undo puts every one back.</p>}
+          {quote.files === 0 ? (
+            <p className="mt-2 text-amber-200">Nothing to put in folders yet. Sort the files first.</p>
+          ) : (
+            <div className="mt-3 flex gap-2">
+              <Button variant="primary" onClick={() => void go()} loading={busy}>
+                <FolderInput className="h-4 w-4" aria-hidden /> {verb} {quote.files} file{quote.files === 1 ? '' : 's'}
               </Button>
+              <Button variant="ghost" onClick={() => setQuote(null)}>Cancel</Button>
             </div>
           )}
         </div>
-      </div>
-      <FolderBoxes active={!!job} />
+      )}
       {job && (
         <div className="mt-4" aria-live="polite">
-          <div className="mb-1 text-xs text-slate-400">
-            Sorting: {job.done} of {job.total} · spent {usd(job.costUsd)}
-          </div>
-          <ProgressBar value={job.total ? (job.done / job.total) * 100 : 0} label="Sorting clips" />
+          <div className="mb-1 text-xs text-slate-400">{ran.current === 'move' ? 'Moving' : 'Copying'}: {job.done} of {job.total}</div>
+          <ProgressBar value={job.total ? (job.done / job.total) * 100 : 0} label="Putting files in folders" />
+        </div>
+      )}
+      {last.data && !jobId && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm">
+          <span className="text-slate-300">
+            Last move: <strong>{last.data.files}</strong> file{last.data.files === 1 ? '' : 's'} into <code className="rounded bg-slate-900 px-1.5 py-0.5 text-xs">{last.data.destRoot}</code>
+          </span>
+          <Button size="sm" onClick={() => void undo(last.data!)} loading={busy}>
+            <Undo2 className="h-3.5 w-3.5" aria-hidden /> Put them back
+          </Button>
         </div>
       )}
     </Card>
   );
 }
+
 function ClipTile({ clip, onOpen }: { clip: Clip; onOpen: () => void }) {
   return (
     <button onClick={onOpen} className="group block w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-left transition hover:border-slate-600">
       <div className="relative aspect-video bg-slate-900">
         {clip.thumb ? <img src={clip.thumb} alt="" className="h-full w-full object-cover" loading="lazy" /> : <div className="grid h-full place-items-center text-xs text-slate-600">No preview</div>}
-        <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] tabular-nums text-white">{mmss(clip.durationSec)}</span>
+        <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] tabular-nums text-white">
+          {clip.kind === 'photo' ? <><ImageIcon className="h-3 w-3" aria-hidden /> Photo</> : mmss(clip.durationSec)}
+        </span>
         <span className="absolute left-1 top-1">{clip.duplicateOf ? <Badge tone="amber">Duplicate</Badge> : clip.sorted ? <Badge tone="cyan">{clip.folder}</Badge> : <Badge>Not sorted</Badge>}</span>
       </div>
       <div className="p-2">
@@ -567,13 +542,13 @@ function DaysList({ days, error, onClips, onReels }: { days: Day[] | null; error
           <div className="min-w-48 flex-1">
             <div className="font-medium">{dayText(d.day)}</div>
             <div className="mt-0.5 text-xs text-slate-500">
-              {d.clips} clip{d.clips === 1 ? '' : 's'} Â· {mmss(d.seconds)} of footage Â· {timeText(d.first)}{d.clips > 1 ? ` to ${timeText(d.last)}` : ''}
+              {d.clips} clip{d.clips === 1 ? '' : 's'} · {mmss(d.seconds)} of footage · {timeText(d.first)}{d.clips > 1 ? ` to ${timeText(d.last)}` : ''}
             </div>
             <div className="mt-1.5 flex flex-wrap gap-1">{d.folders.map((f) => <Badge key={f} tone="slate">{f}</Badge>)}</div>
           </div>
           <div className="flex gap-2">
             <Button size="sm" onClick={() => onClips(d.day)}>View clips</Button>
-            <Button size="sm" onClick={() => onReels(d.day)} disabled={d.clips < 3} title={d.clips < 3 ? 'Needs at least 3 clips' : undefined}>
+            <Button size="sm" onClick={() => onReels(d.day)} disabled={d.videos < 3} title={d.videos < 3 ? 'Needs at least 3 videos' : undefined}>
               <Layers className="h-3.5 w-3.5" aria-hidden /> Reel ideas
             </Button>
           </div>
@@ -636,13 +611,13 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
           <CardHeader eyebrow="Costs a little" title="Plan reels from your footage" />
           <p className="mt-2 text-sm text-slate-400">Claude reads what each sorted clip shows and when it was filmed. Vlog reels use clips from one day in the order they happened; topic reels pull clips from any day around one idea. Every beat names a real clip.</p>
           {sorted < 3 ? (
-            <p className="mt-3 text-sm text-amber-200">Sort at least 3 clips first{unsorted ? ` (${unsorted} are waiting above)` : ''}.</p>
+            <p className="mt-3 text-sm text-amber-200">Sort at least 3 videos first{unsorted ? ` (${unsorted} file${unsorted === 1 ? ' is' : 's are'} waiting above)` : ''}. Reels are cut from video, so photos are filed but not used here.</p>
           ) : (
             <div className="mt-3 flex flex-wrap items-end gap-3">
               <Field label="From">
                 <Select value={planDay} onChange={(e) => (setPlanDay(e.target.value), setQuote(null))}>
                   <option value="">All my footage</option>
-                  {days.filter((d) => d.clips >= 3).map((d) => <option key={d.day} value={d.day}>{dayText(d.day)} ({d.clips} clips)</option>)}
+                  {days.filter((d) => d.videos >= 3).map((d) => <option key={d.day} value={d.day}>{dayText(d.day)} ({d.videos} videos)</option>)}
                 </Select>
               </Field>
               <Field label="How many">
@@ -680,11 +655,11 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={r.style === 'vlog' ? 'violet' : 'cyan'}>{r.style === 'vlog' ? `Vlog${r.day ? ` Â· ${dayText(r.day)}` : ''}` : 'Topic'}</Badge>
+                  <Badge tone={r.style === 'vlog' ? 'violet' : 'cyan'}>{r.style === 'vlog' ? `Vlog${r.day ? ` · ${dayText(r.day)}` : ''}` : 'Topic'}</Badge>
                   {r.status !== 'idea' && <Badge tone={r.status === 'used' ? 'emerald' : 'amber'}>{r.status === 'used' ? 'Used' : 'Saved'}</Badge>}
                 </div>
                 <h3 className="mt-1.5 text-lg font-semibold">{r.title}</h3>
-                {r.hook && <p className="mt-1 text-sm text-slate-300">Hook: â€œ{r.hook}â€</p>}
+                {r.hook && <p className="mt-1 text-sm text-slate-300">Hook: “{r.hook}”</p>}
               </div>
               {canWrite && (
                 <div className="flex gap-2">
@@ -706,8 +681,8 @@ function Reels({ reels, days, canWrite, planDay, setPlanDay, unsorted, sorted, r
                     <div className="grid h-14 w-24 shrink-0 place-items-center rounded bg-slate-900 text-[10px] text-slate-600">Clip removed</div>
                   )}
                   <div className="min-w-0 text-xs">
-                    <div className="text-slate-500">{i + 1} Â· {b.seconds}s{b.clip ? ` Â· ${b.clip.folder}` : ''}</div>
-                    <div className="mt-0.5 text-slate-200">{b.line || 'â€”'}</div>
+                    <div className="text-slate-500">{i + 1} · {b.seconds}s{b.clip ? ` · ${b.clip.folder}` : ''}</div>
+                    <div className="mt-0.5 text-slate-200">{b.line || '—'}</div>
                     {b.clip && <div className="mt-0.5 truncate text-slate-500" title={b.clip.name}>{b.clip.name}</div>}
                   </div>
                 </li>
@@ -823,13 +798,13 @@ function ClipModal({ clip, names, canWrite, onClose, onChanged, toast }: { clip:
       {clip && (
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div>
-            {src ? <video key={src} src={src} controls className="max-h-[60vh] w-full rounded-xl bg-black" /> : <Skeleton className="aspect-video" />}
+            {!src ? <Skeleton className="aspect-video" /> : clip.kind === 'photo' ? <img key={src} src={src} alt={clip.description || clip.name} className="max-h-[60vh] w-full rounded-xl bg-black object-contain" /> : <video key={src} src={src} controls className="max-h-[60vh] w-full rounded-xl bg-black" />}
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
               <span>{dayText(clip.shotDate)}, {timeText(clip.shotAt)}</span>
-              <span>{mmss(clip.durationSec)}</span>
-              {clip.width && clip.height && <span>{clip.width}Ã—{clip.height}{clip.height > clip.width ? ' (vertical)' : ''}</span>}
+              {clip.kind === 'video' && <span>{mmss(clip.durationSec)}</span>}
+              {clip.width && clip.height && <span>{clip.width}×{clip.height}{clip.height > clip.width ? ' (vertical)' : ''}</span>}
               <span>{mb(clip.sizeBytes)}</span>
-              <span className="inline-flex items-center gap-1">{clip.hasSound ? <Volume2 className="h-3 w-3" aria-hidden /> : <VolumeX className="h-3 w-3" aria-hidden />}{clip.hasSound ? 'Has sound' : 'Almost silent'}</span>
+              {clip.kind === 'video' && <span className="inline-flex items-center gap-1">{clip.hasSound ? <Volume2 className="h-3 w-3" aria-hidden /> : <VolumeX className="h-3 w-3" aria-hidden />}{clip.hasSound ? 'Has sound' : 'Almost silent'}</span>}
             </div>
             {clip.duplicateOf && <p className="mt-2 text-xs text-amber-300">This is a copy of a clip that is already in the Vault, so it is not counted.</p>}
           </div>

@@ -19,11 +19,22 @@ import { inWorkspace, type Workspace } from './workspaces';
  * and to plan reels, and only after the price has been shown and approved.
  */
 
-export const VAULT_FOLDERS = ['Talking head', 'Desk', 'Studio', 'Close-ups', 'On the go', 'Outdoors', 'Events', 'Food & drink', 'Screen recording', 'Other'] as const;
+export const VAULT_FOLDERS = ['Talking head', 'Desk', 'Studio', 'Close-ups', 'On the go', 'Outdoors', 'Events', 'Food & drink', 'Selfies & portraits', 'Screenshots', 'Screen recording', 'Other'] as const;
 
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.m4v', '.webm']);
-export const UPLOAD_TYPES: Record<string, string> = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm' };
+const PHOTO_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic']);
+export const UPLOAD_TYPES: Record<string, string> = {
+  'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm',
+  'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/heic': '.heic',
+};
 const MAX_SCAN_FILES = 5000;
+
+export type MediaKind = 'video' | 'photo';
+/** Photo or video, by the file's ending. Anything the Vault does not know is not read at all. */
+export const kindOfFile = (file: string): MediaKind | null => {
+  const ext = path.extname(file).toLowerCase();
+  return PHOTO_EXT.has(ext) ? 'photo' : VIDEO_EXT.has(ext) ? 'video' : null;
+};
 
 const dir = (...p: string[]) => path.join(config.vaultDir, ...p);
 
@@ -50,6 +61,18 @@ export function shotTime(tags: Record<string, unknown> | undefined): { at: Date;
   if (typeof created === 'string') {
     const at = new Date(created);
     if (!Number.isNaN(at.getTime()) && at.getFullYear() > 2000) return { at, day: localDay(at) };
+  }
+  return null;
+}
+
+/** The day a photo was taken, from its EXIF text ("2026:10:28 18:22:14", no time zone, so it is the local time it was taken). */
+export function exifTime(tags: Record<string, unknown> | undefined): { at: Date; day: string } | null {
+  for (const key of ['DateTimeOriginal', 'DateTimeDigitized', 'DateTime']) {
+    const v = tags?.[key];
+    const m = typeof v === 'string' ? v.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/) : null;
+    if (!m) continue;
+    const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+    if (!Number.isNaN(at.getTime()) && at.getFullYear() > 2000) return { at, day: `${m[1]}-${m[2]}-${m[3]}` };
   }
   return null;
 }
@@ -154,10 +177,23 @@ export interface Probe {
 }
 
 export async function probeFile(file: string): Promise<Probe> {
-  return probe(file);
+  return probe(file, 'video');
 }
 
-async function probe(file: string): Promise<Probe> {
+/** A photo's size and, when the camera wrote one, the time it was taken. */
+async function probePhoto(file: string): Promise<Probe> {
+  try {
+    const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height:frame_tags', '-read_intervals', '%+#1', '-of', 'json', file], { timeoutMs: 30_000 });
+    const j = JSON.parse(stdout.toString()) as { streams?: { width?: number; height?: number }[]; frames?: { tags?: Record<string, unknown> }[] };
+    const s = j.streams?.[0];
+    return { durationSec: null, width: s?.width ?? null, height: s?.height ?? null, shot: exifTime(j.frames?.[0]?.tags) };
+  } catch {
+    return { durationSec: null, width: null, height: null, shot: null };
+  }
+}
+
+async function probe(file: string, kind: MediaKind): Promise<Probe> {
+  if (kind === 'photo') return probePhoto(file);
   try {
     const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_streams', '-show_format', '-of', 'json', file], { timeoutMs: 30_000 });
     const j = JSON.parse(stdout.toString()) as { format?: { duration?: string; tags?: Record<string, unknown> }; streams?: { width?: number; height?: number; tags?: { rotate?: string }; side_data_list?: { rotation?: number }[] }[] };
@@ -200,8 +236,9 @@ async function fingerprint(file: string, size: number): Promise<string> {
 
 /** A JPEG of the clip at a fraction of its length, no bigger than `box` pixels either way. */
 async function frameAt(file: string, durationSec: number | null, fraction: number, box: number): Promise<Buffer> {
-  const t = durationSec ? Math.max(0, durationSec * fraction) : 0;
-  const { stdout } = await run('ffmpeg', ['-v', 'error', '-ss', t.toFixed(2), '-i', file, '-frames:v', '1', '-vf', `scale=${box}:${box}:force_original_aspect_ratio=decrease`, '-q:v', '5', '-f', 'mjpeg', '-'], { timeoutMs: 60_000 });
+  // A photo has no length and nothing to seek to (seeking in a one-picture JPEG gives no picture at all).
+  const seek = durationSec ? ['-ss', Math.max(0, durationSec * fraction).toFixed(2)] : [];
+  const { stdout } = await run('ffmpeg', ['-v', 'error', ...seek, '-i', file, '-frames:v', '1', '-vf', `scale=${box}:${box}:force_original_aspect_ratio=decrease`, '-q:v', '5', '-f', 'mjpeg', '-'], { timeoutMs: 60_000 });
   if (stdout.length === 0) throw new Error('No picture');
   return stdout;
 }
@@ -225,20 +262,23 @@ export interface ClipRow {
   tags: string[];
   description: string;
   status: 'new' | 'sorted';
+  kind: MediaKind;
 }
 
 /** Reads one file and files it in the Vault. A copy of a clip already there is kept but marked as a duplicate. */
 async function ingest(o: { orgId: string; workspaceId: string; file: string; name: string; source: 'folder' | 'upload'; shotHint?: Date }): Promise<{ id: string; duplicate: boolean }> {
+  const kind = kindOfFile(o.file);
+  if (!kind) throw new Error('Not a photo or video');
   const stat = await fs.stat(o.file);
-  const [info, audioDb, print] = await Promise.all([probe(o.file), loudness(o.file), fingerprint(o.file, stat.size)]);
+  const [info, audioDb, print] = await Promise.all([probe(o.file, kind), kind === 'video' ? loudness(o.file) : Promise.resolve(null), fingerprint(o.file, stat.size)]);
   const hint = o.shotHint && !Number.isNaN(o.shotHint.getTime()) && o.shotHint.getFullYear() > 2000 ? o.shotHint : stat.mtime;
   const shot = info.shot ?? { at: hint, day: localDay(hint) };
   const db = getDb();
   const first = await db.query<{ id: string }>(`SELECT id FROM vault_clips WHERE org_id=$1 AND fingerprint=$2 AND duplicate_of IS NULL ORDER BY created_at LIMIT 1`, [o.orgId, print]);
   const { rows } = await db.query<{ id: string }>(
-    `INSERT INTO vault_clips (org_id, workspace_id, name, path, source, size_bytes, duration_sec, width, height, shot_at, shot_date, audio_db, fingerprint, duplicate_of)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-    [o.orgId, o.workspaceId, o.name.slice(0, 200), o.file, o.source, stat.size, info.durationSec, info.width, info.height, shot.at.toISOString(), shot.day, audioDb, print, first.rows[0]?.id ?? null],
+    `INSERT INTO vault_clips (org_id, workspace_id, name, path, source, size_bytes, duration_sec, width, height, shot_at, shot_date, audio_db, fingerprint, duplicate_of, kind)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+    [o.orgId, o.workspaceId, o.name.slice(0, 200), o.file, o.source, stat.size, info.durationSec, info.width, info.height, shot.at.toISOString(), shot.day, audioDb, print, first.rows[0]?.id ?? null, kind],
   );
   const id = rows[0].id;
   try {
@@ -253,7 +293,7 @@ async function ingest(o: { orgId: string; workspaceId: string; file: string; nam
 const CONTENT_TYPE_OK = (t: string) => Object.prototype.hasOwnProperty.call(UPLOAD_TYPES, t);
 
 export async function saveVaultUpload(o: { orgId: string; workspaceId: string; body: Buffer; contentType: string; name: string; shotHint?: Date }) {
-  if (!CONTENT_TYPE_OK(o.contentType)) throw badRequest('Use an MP4, MOV or WebM video.');
+  if (!CONTENT_TYPE_OK(o.contentType)) throw badRequest('Use an MP4, MOV or WebM video, or a JPG, PNG, WebP or HEIC photo.');
   if (o.body.length === 0) throw badRequest('The file is empty');
   await fs.mkdir(dir('clips'), { recursive: true });
   const file = path.resolve(dir('clips', `${crypto.randomUUID()}${UPLOAD_TYPES[o.contentType]}`));
@@ -270,7 +310,7 @@ export async function saveVaultUpload(o: { orgId: string; workspaceId: string; b
 
 export interface VaultJob {
   id: string;
-  kind: 'scan' | 'sort';
+  kind: 'scan' | 'sort' | 'organize';
   state: 'running' | 'done' | 'error';
   total: number;
   done: number;
@@ -280,12 +320,14 @@ export interface VaultJob {
   costUsd: number;
   note: string;
   error: string;
+  /** Sorting only: each clip as it is filed, in order, so the page can show it landing in its folder. */
+  log: { id: string; folder: string }[];
 }
 const jobs = new Map<string, VaultJob>();
 export const getVaultJob = (id: string): VaultJob | undefined => jobs.get(id);
 
 function newJob(kind: VaultJob['kind'], total: number): VaultJob {
-  const job: VaultJob = { id: crypto.randomUUID(), kind, state: 'running', total, done: 0, added: 0, duplicates: 0, failed: 0, costUsd: 0, note: '', error: '' };
+  const job: VaultJob = { id: crypto.randomUUID(), kind, state: 'running', total, done: 0, added: 0, duplicates: 0, failed: 0, costUsd: 0, note: '', error: '', log: [] };
   jobs.set(job.id, job);
   if (jobs.size > 40) jobs.delete(jobs.keys().next().value as string);
   return job;
@@ -316,7 +358,7 @@ async function walk(root: string): Promise<string[]> {
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
       const full = path.join(d, e.name);
       if (e.isDirectory()) await visit(full);
-      else if (e.isFile() && VIDEO_EXT.has(path.extname(e.name).toLowerCase())) found.push(full);
+      else if (e.isFile() && kindOfFile(e.name)) found.push(full);
     }
   };
   await visit(root);
@@ -333,11 +375,12 @@ export async function scanFolder(orgId: string, ws: Workspace, folder: string): 
     throw badRequest('That folder was not found on this computer.');
   }
   const files = await walk(root);
-  if (files.length === 0) throw badRequest('No MP4, MOV, M4V or WebM videos were found in that folder.');
+  if (files.length === 0) throw badRequest('No videos (MP4, MOV, M4V, WebM) or photos (JPG, PNG, WebP, HEIC) were found in that folder.');
   const known = new Set((await getDb().query<{ path: string }>(`SELECT path FROM vault_clips WHERE org_id=$1 AND source='folder'`, [orgId])).rows.map((r) => r.path));
   const fresh = files.filter((f) => !known.has(f));
   const job = newJob('scan', fresh.length);
-  job.note = `${files.length} videos in the folder, ${files.length - fresh.length} already in the Vault.`;
+  const photos = files.filter((f) => kindOfFile(f) === 'photo').length;
+  job.note = `${files.length - photos} video${files.length - photos === 1 ? '' : 's'} and ${photos} photo${photos === 1 ? '' : 's'} in the folder, ${files.length - fresh.length} already in the Vault.`;
   void (async () => {
     try {
       await pool(fresh, 3, async (file) => {
@@ -366,34 +409,36 @@ const SORT_MODEL = 'claude-haiku-5-5';
 const SORT_MAX_OUT = 220;
 const SORT_FRAMES = [0.15, 0.5, 0.85];
 const SORT_BOX = 512;
-/** About 200 tokens a picture at this size, plus the instructions and the clip's details. */
-const SORT_IN_TOKENS = SORT_FRAMES.length * 220 + 420;
+/** About 200 tokens a picture at this size, plus the instructions and the clip's details. A photo is one picture. */
+export const sortTokens = (kind: MediaKind) => (kind === 'photo' ? 1 : SORT_FRAMES.length) * 220 + 420;
 /** One run sorts at most this many clips, so one click can only ever spend a small, known amount. */
 const SORT_BATCH = 500;
 
 const SORT_SYSTEM =
-  "You file a creator's raw phone footage into folders so she can find it later. You are shown three frames from one clip (near the start, middle and end). " +
+  "You file a creator's raw phone videos and photos into folders so she can find them later. For a video you are shown three frames from one clip (near the start, middle and end); for a photo, the photo itself. " +
   `Choose exactly one folder from: ${VAULT_FOLDERS.join(', ')}. ` +
   '"Talking head" is a person speaking to the camera. "Desk" is a laptop, desk or home-office shot. "Studio" is a set or studio space with lights or a backdrop. ' +
   '"Close-ups" are tight shots of an object, hands, a screen or a detail. "On the go" is moving through places: walking, driving, travelling. "Outdoors" is scenery or being outside while staying put. ' +
-  '"Events" is people gathered, a stage, a room being spoken to. "Food & drink" is eating, drinking, cooking. "Screen recording" is a phone or computer screen. Use "Other" when none fit. ' +
-  'Give 3 to 6 short lowercase tags (what is in it, the setting, the mood) and one plain sentence of at most 20 words saying what happens. ' +
+  '"Events" is people gathered, a stage, a room being spoken to. "Food & drink" is eating, drinking, cooking. "Selfies & portraits" is a photo or video that is mainly of a person posing for the camera. ' +
+  '"Screenshots" is a still capture of a phone or computer screen. "Screen recording" is a moving recording of one. Use "Other" when none fit. ' +
+  'Give 3 to 6 short lowercase tags (what is in it, the setting, the mood) and one plain sentence of at most 20 words saying what happens or what it shows. ' +
   'Answer with only JSON: {"folder":"","tags":[],"description":""}';
 
-async function unsortedIds(orgId: string, ws: Workspace): Promise<string[]> {
+async function unsortedIds(orgId: string, ws: Workspace): Promise<{ id: string; kind: MediaKind }[]> {
   const params: unknown[] = [orgId];
-  const { rows } = await getDb().query<{ id: string }>(
-    `SELECT c.id FROM vault_clips c WHERE c.org_id=$1 AND ${inWorkspace(ws, 'c', params)} AND c.status='new' AND c.duplicate_of IS NULL ORDER BY c.shot_at DESC LIMIT ${SORT_BATCH}`,
+  const { rows } = await getDb().query<{ id: string; kind: MediaKind }>(
+    `SELECT c.id, c.kind FROM vault_clips c WHERE c.org_id=$1 AND ${inWorkspace(ws, 'c', params)} AND c.status='new' AND c.duplicate_of IS NULL ORDER BY c.shot_at DESC LIMIT ${SORT_BATCH}`,
     params,
   );
-  return rows.map((r) => r.id);
+  return rows;
 }
 
 /** Free: how many clips are waiting and what sorting them would cost. Nothing is spent until `approved`. */
 export async function sortClips(orgId: string, ws: Workspace, approved: boolean) {
-  const ids = await unsortedIds(orgId, ws);
-  const estimateUsd = ids.length * calcCostUsd(SORT_MODEL, SORT_IN_TOKENS, SORT_MAX_OUT / 2);
-  const maxUsd = ids.length * calcCostUsd(SORT_MODEL, Math.round(SORT_IN_TOKENS * 1.4), SORT_MAX_OUT);
+  const waiting = await unsortedIds(orgId, ws);
+  const ids = waiting.map((w) => w.id);
+  const estimateUsd = waiting.reduce((sum, w) => sum + calcCostUsd(SORT_MODEL, sortTokens(w.kind), SORT_MAX_OUT / 2), 0);
+  const maxUsd = waiting.reduce((sum, w) => sum + calcCostUsd(SORT_MODEL, Math.round(sortTokens(w.kind) * 1.4), SORT_MAX_OUT), 0);
   const keyMissing = !(await getSecret(orgId, 'anthropic'));
   if (!approved) return { approved: false as const, model: SORT_MODEL, clips: ids.length, estimateUsd, maxUsd, keyMissing };
   if (ids.length === 0) throw badRequest('Every clip is already sorted.');
@@ -411,15 +456,19 @@ export async function sortClips(orgId: string, ws: Workspace, approved: boolean)
           const { rows } = await getDb().query<ClipRow>('SELECT * FROM vault_clips WHERE id=$1 AND org_id=$2', [id, orgId]);
           const c = rows[0];
           if (!c) throw new Error('gone');
-          const images = await Promise.all(SORT_FRAMES.map(async (f) => ({ data: (await frameAt(c.path, c.duration_sec, f, SORT_BOX)).toString('base64') })));
+          const photo = c.kind === 'photo';
+          const images = await Promise.all((photo ? [0] : SORT_FRAMES).map(async (f) => ({ data: (await frameAt(c.path, c.duration_sec, f, SORT_BOX)).toString('base64') })));
           const when = new Date(c.shot_at).toLocaleString('en-US', { weekday: 'long', hour: 'numeric', minute: '2-digit' });
-          const user = `File: ${c.name}\nLength: ${c.duration_sec ?? '?'} seconds\nFilmed: ${when}\nSound: ${c.audio_db !== null && c.audio_db > -35 ? 'audible' : 'almost silent'}`;
+          const user = photo
+            ? `File: ${c.name}\nType: photo\nTaken: ${when}`
+            : `File: ${c.name}\nType: video\nLength: ${c.duration_sec ?? '?'} seconds\nFilmed: ${when}\nSound: ${c.audio_db !== null && c.audio_db > -35 ? 'audible' : 'almost silent'}`;
           const res = await runPrompt(orgId, { model: SORT_MODEL, system: SORT_SYSTEM, user, maxTokens: SORT_MAX_OUT, images });
           await recordUsage({ orgId, provider: 'claude', model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd, simulated: res.simulated });
           job.costUsd += res.costUsd;
           const sorted = parseSort(res.text);
           if (!sorted) throw new Error('unreadable answer');
           await getDb().query(`UPDATE vault_clips SET folder=$3, tags=$4, description=$5, status='sorted' WHERE id=$1 AND org_id=$2`, [id, orgId, sorted.folder, sorted.tags, sorted.description]);
+          job.log.push({ id, folder: sorted.folder });
         } catch (e) {
           job.failed++;
           logger.warn('vault sort: clip skipped', { id, error: (e as Error).message });
@@ -448,6 +497,7 @@ async function thumbOf(id: string): Promise<string> {
 const mapClip = (c: ClipRow, thumb: string) => ({
   id: c.id,
   name: c.name,
+  kind: c.kind,
   source: c.source,
   sizeBytes: Number(c.size_bytes),
   durationSec: c.duration_sec,
@@ -470,6 +520,7 @@ export interface ClipFilter {
   folder?: string;
   day?: string;
   q?: string;
+  kind?: string;
   /** hide (default), only, or all */
   duplicates?: string;
   unsorted?: boolean;
@@ -485,6 +536,7 @@ export async function listClips(orgId: string, ws: Workspace, f: ClipFilter) {
   const add = (sql: string, v: unknown) => (params.push(v), where.push(sql.replace('?', `$${params.length}`)));
   if (f.ids) add('c.id = ANY(?::uuid[])', f.ids.filter((i) => /^[0-9a-f-]{36}$/i.test(i)).slice(0, 100));
   if (f.folder) add('c.folder = ?', f.folder);
+  if (f.kind === 'photo' || f.kind === 'video') add('c.kind = ?', f.kind);
   if (f.day && /^\d{4}-\d{2}-\d{2}$/.test(f.day)) add('c.shot_date = ?::date', f.day);
   if (f.unsorted) where.push("c.status = 'new'");
   if (f.q?.trim()) {
@@ -510,8 +562,10 @@ export async function vaultStats(orgId: string, ws: Workspace) {
   const scope = `c.org_id=$1 AND ${inWorkspace(ws, 'c', params)}`;
   const db = getDb();
   const [totals, folders] = await Promise.all([
-    db.query<{ clips: number; duplicates: number; unsorted: number; days: number; seconds: number }>(
-      `SELECT COUNT(*) FILTER (WHERE duplicate_of IS NULL)::int AS clips, COUNT(*) FILTER (WHERE duplicate_of IS NOT NULL)::int AS duplicates,
+    db.query<{ clips: number; photos: number; videos: number; sortedVideos: number; duplicates: number; unsorted: number; days: number; seconds: number }>(
+      `SELECT COUNT(*) FILTER (WHERE duplicate_of IS NULL)::int AS clips, COUNT(*) FILTER (WHERE duplicate_of IS NULL AND kind='photo')::int AS photos,
+              COUNT(*) FILTER (WHERE duplicate_of IS NULL AND kind='video')::int AS videos, COUNT(*) FILTER (WHERE duplicate_of IS NULL AND kind='video' AND status='sorted')::int AS "sortedVideos",
+              COUNT(*) FILTER (WHERE duplicate_of IS NOT NULL)::int AS duplicates,
               COUNT(*) FILTER (WHERE duplicate_of IS NULL AND status='new')::int AS unsorted, COUNT(DISTINCT shot_date) FILTER (WHERE duplicate_of IS NULL)::int AS days,
               COALESCE(SUM(duration_sec) FILTER (WHERE duplicate_of IS NULL),0)::float AS seconds
        FROM vault_clips c WHERE ${scope}`,
@@ -527,8 +581,8 @@ export async function listDays(orgId: string, ws: Workspace, limit = 60, offset 
   const params: unknown[] = [orgId];
   const scope = `c.org_id=$1 AND ${inWorkspace(ws, 'c', params)} AND c.duplicate_of IS NULL`;
   const db = getDb();
-  const { rows } = await db.query<{ day: string; clips: number; seconds: number; first: string | Date; last: string | Date; folders: string[] }>(
-    `SELECT c.shot_date::text AS day, COUNT(*)::int AS clips, COALESCE(SUM(c.duration_sec),0)::float AS seconds, MIN(c.shot_at) AS first, MAX(c.shot_at) AS last,
+  const { rows } = await db.query<{ day: string; clips: number; videos: number; seconds: number; first: string | Date; last: string | Date; folders: string[] }>(
+    `SELECT c.shot_date::text AS day, COUNT(*)::int AS clips, COUNT(*) FILTER (WHERE c.kind='video')::int AS videos, COALESCE(SUM(c.duration_sec),0)::float AS seconds, MIN(c.shot_at) AS first, MAX(c.shot_at) AS last,
             COALESCE(array_agg(DISTINCT c.folder) FILTER (WHERE c.folder <> ''), '{}') AS folders
      FROM vault_clips c WHERE ${scope} GROUP BY c.shot_date ORDER BY c.shot_date DESC LIMIT ${Math.min(limit, 200)} OFFSET ${Math.max(offset, 0)}`,
     params,
@@ -540,7 +594,7 @@ export async function listDays(orgId: string, ws: Workspace, limit = 60, offset 
   );
   const thumbs = new Map<string, string[]>();
   for (const s of sample.rows) thumbs.set(s.day, [...(thumbs.get(s.day) ?? []), await thumbOf(s.id)]);
-  return rows.map((r) => ({ day: r.day, clips: r.clips, seconds: r.seconds, first: new Date(r.first).toISOString(), last: new Date(r.last).toISOString(), folders: r.folders, thumbs: thumbs.get(r.day) ?? [] }));
+  return rows.map((r) => ({ day: r.day, clips: r.clips, videos: r.videos, seconds: r.seconds, first: new Date(r.first).toISOString(), last: new Date(r.last).toISOString(), folders: r.folders, thumbs: thumbs.get(r.day) ?? [] }));
 }
 
 async function loadClip(orgId: string, id: string): Promise<ClipRow> {
@@ -582,6 +636,218 @@ export async function clipFile(id: string): Promise<string> {
 
 export const clipExists = (orgId: string, id: string) => loadClip(orgId, id).then(() => true);
 
+// ---- putting the files in folders on this computer ------------------------------------------------------
+
+export type OrganizeMode = 'copy' | 'move';
+interface MoveEntry {
+  id: string;
+  from: string;
+  to: string;
+}
+
+const movesDir = () => dir('moves');
+
+/** The folder the sorted files go into. Never a whole drive. */
+function destinationRoot(dest: string): string {
+  if (!path.isAbsolute(dest)) throw badRequest('Give the full path of the folder to put the files in, for example C:\\Users\\you\\Pictures\\Sorted.');
+  const root = path.resolve(dest);
+  if (path.parse(root).root === root) throw badRequest('Pick a folder, not a whole drive. Add a folder name on the end, like Sorted.');
+  return root;
+}
+
+/** Photos/Desk/IMG_1.jpg, Videos/Studio/clip.mp4: one tree for photos, one for videos, a folder each. */
+export const targetPath = (root: string, kind: MediaKind, folder: string, name: string) => path.join(root, kind === 'photo' ? 'Photos' : 'Videos', folder, path.basename(name));
+
+const exists = (p: string) => fs.access(p).then(() => true, () => false);
+
+/** The same size and the same first and last 64 KB: the file is already there, so copying it again would only make a twin. */
+async function sameFile(a: string, b: string): Promise<boolean> {
+  const [sa, sb] = await Promise.all([fs.stat(a), fs.stat(b)]);
+  return sa.size === sb.size && (await fingerprint(a, sa.size)) === (await fingerprint(b, sb.size));
+}
+
+/** The first name that is not taken: "clip.mp4", then "clip (2).mp4", and so on. Nothing is ever overwritten. */
+async function freeName(file: string): Promise<string> {
+  const { dir: d, name, ext } = path.parse(file);
+  for (let i = 1; ; i++) {
+    const p = i === 1 ? file : path.join(d, `${name} (${i})${ext}`);
+    if (!(await exists(p))) return p;
+  }
+}
+
+/** Where a copy goes: the first free name, unless one of the names already holds this very file (a second run makes no twin). */
+async function copyTarget(from: string, to: string): Promise<{ to: string; already: boolean }> {
+  const { dir: d, name, ext } = path.parse(to);
+  for (let i = 1; ; i++) {
+    const p = i === 1 ? to : path.join(d, `${name} (${i})${ext}`);
+    if (!(await exists(p))) return { to: p, already: false };
+    if (await sameFile(from, p)) return { to: p, already: true };
+  }
+}
+
+async function moveFile(from: string, to: string): Promise<void> {
+  try {
+    await fs.rename(from, to);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+    // Another drive: copy, check the copy is whole, then remove the original.
+    await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+    const [a, b] = await Promise.all([fs.stat(from), fs.stat(to)]);
+    if (a.size !== b.size) {
+      await fs.rm(to, { force: true });
+      throw new Error('The copy did not match the original');
+    }
+    await fs.rm(from);
+  }
+}
+
+/**
+ * Free to call: how many of the sorted files from your folders would go where. Nothing is touched until `approved`.
+ * Only files the Vault read from a folder on this computer are used (uploads stay in the Vault), and copies of a file are left out.
+ * `copy` leaves your originals where they are; `move` takes them out of their old place, and can be undone.
+ */
+export async function organizeFiles(orgId: string, ws: Workspace, o: { destRoot: string; mode: OrganizeMode; approved: boolean }) {
+  const root = destinationRoot(o.destRoot);
+  const params: unknown[] = [orgId];
+  const { rows } = await getDb().query<{ id: string; name: string; path: string; kind: MediaKind; folder: string; status: string; duplicate_of: string | null }>(
+    `SELECT c.id, c.name, c.path, c.kind, c.folder, c.status, c.duplicate_of FROM vault_clips c WHERE c.org_id=$1 AND ${inWorkspace(ws, 'c', params)} AND c.source='folder' ORDER BY c.shot_at`,
+    params,
+  );
+  const ready = rows.filter((r) => r.status === 'sorted' && !r.duplicate_of);
+  const folders = new Map<string, number>();
+  for (const r of ready) folders.set(r.folder, (folders.get(r.folder) ?? 0) + 1);
+  const quote = {
+    approved: false as const,
+    destRoot: root,
+    mode: o.mode,
+    files: ready.length,
+    photos: ready.filter((r) => r.kind === 'photo').length,
+    videos: ready.filter((r) => r.kind === 'video').length,
+    folders: [...folders].map(([folder, n]) => ({ folder, n })).sort((a, b) => b.n - a.n || a.folder.localeCompare(b.folder)),
+    skippedUnsorted: rows.filter((r) => r.status !== 'sorted' && !r.duplicate_of).length,
+    skippedDuplicates: rows.filter((r) => r.duplicate_of).length,
+  };
+  if (!o.approved) return quote;
+  if (ready.length === 0) throw badRequest('Nothing to put in folders yet. Sort the files first.');
+
+  const job = newJob('organize', ready.length);
+  job.note = `${o.mode === 'move' ? 'Moving' : 'Copying'} into ${root}`;
+  void (async () => {
+    const manifest: MoveEntry[] = [];
+    let already = 0;
+    try {
+      for (const r of ready) {
+        try {
+          const from = path.resolve(r.path);
+          const wanted = targetPath(root, r.kind, r.folder, r.name);
+          if (!(await exists(from))) throw new Error('The file is no longer where the Vault found it');
+          if (from.toLowerCase() === wanted.toLowerCase()) {
+            already++;
+          } else if (o.mode === 'copy') {
+            const t = await copyTarget(from, wanted);
+            if (t.already) already++; // a second run does not make a second copy
+            else {
+              await fs.mkdir(path.dirname(t.to), { recursive: true });
+              await fs.copyFile(from, t.to, fs.constants.COPYFILE_EXCL);
+              job.added++;
+            }
+          } else {
+            const to = await freeName(wanted);
+            await fs.mkdir(path.dirname(to), { recursive: true });
+            await moveFile(from, to);
+            manifest.push({ id: r.id, from, to });
+            await getDb().query('UPDATE vault_clips SET path=$3 WHERE id=$1 AND org_id=$2', [r.id, orgId, to]);
+            job.added++;
+          }
+        } catch (e) {
+          job.failed++;
+          logger.warn('vault organize: file skipped', { file: r.path, error: (e as Error).message });
+        }
+        job.done++;
+      }
+      if (already) job.note += ` (${already} already in place)`;
+      job.state = 'done';
+    } catch (e) {
+      job.state = 'error';
+      job.error = (e as Error).message;
+    } finally {
+      if (manifest.length) {
+        await fs.mkdir(movesDir(), { recursive: true });
+        await fs.writeFile(path.join(movesDir(), `${job.id}.json`), JSON.stringify({ orgId, destRoot: root, createdAt: new Date().toISOString(), entries: manifest }));
+      }
+    }
+  })();
+  return { approved: true as const, job };
+}
+
+interface MoveManifest {
+  orgId: string;
+  destRoot: string;
+  createdAt: string;
+  entries: MoveEntry[];
+}
+
+async function readManifest(orgId: string, id: string): Promise<MoveManifest> {
+  try {
+    const m = JSON.parse(await fs.readFile(path.join(movesDir(), `${id}.json`), 'utf8')) as MoveManifest;
+    if (m.orgId === orgId) return m;
+  } catch {
+    /* falls through */
+  }
+  throw notFound('There is nothing to undo for that move.');
+}
+
+/** The most recent move that has not been undone, so the page can still offer Undo after a reload. */
+export async function lastMove(orgId: string): Promise<{ id: string; files: number; destRoot: string; createdAt: string } | null> {
+  let names: string[] = [];
+  try {
+    names = (await fs.readdir(movesDir())).filter((n) => /^[0-9a-f-]{36}\.json$/.test(n));
+  } catch {
+    return null;
+  }
+  let best: { id: string; files: number; destRoot: string; createdAt: string } | null = null;
+  for (const n of names) {
+    try {
+      const m = JSON.parse(await fs.readFile(path.join(movesDir(), n), 'utf8')) as MoveManifest;
+      if (m.orgId === orgId && (!best || m.createdAt > best.createdAt)) best = { id: n.slice(0, -5), files: m.entries.length, destRoot: m.destRoot, createdAt: m.createdAt };
+    } catch {
+      /* a half-written file is ignored */
+    }
+  }
+  return best;
+}
+
+/** Puts every moved file back where it came from. A file that has since been moved again, or whose old place is taken, is left alone. */
+export async function undoMove(orgId: string, id: string): Promise<{ restored: number; skipped: number }> {
+  const m = await readManifest(orgId, id);
+  let restored = 0;
+  let skipped = 0;
+  for (const e of [...m.entries].reverse()) {
+    try {
+      if ((await exists(e.to)) && !(await exists(e.from))) {
+        await fs.mkdir(path.dirname(e.from), { recursive: true });
+        await moveFile(e.to, e.from);
+        await getDb().query('UPDATE vault_clips SET path=$3 WHERE id=$1 AND org_id=$2', [e.id, orgId, e.from]);
+        restored++;
+      } else skipped++;
+    } catch {
+      skipped++;
+    }
+  }
+  // Tidy up the folders the move created, only where they are now empty.
+  for (const d of new Set(m.entries.map((e) => path.dirname(e.to)))) {
+    for (let cur = d; cur.toLowerCase().startsWith(m.destRoot.toLowerCase()) && cur.toLowerCase() !== m.destRoot.toLowerCase(); cur = path.dirname(cur)) {
+      try {
+        await fs.rmdir(cur);
+      } catch {
+        break;
+      }
+    }
+  }
+  await fs.rename(path.join(movesDir(), `${id}.json`), path.join(movesDir(), `${id}.undone`));
+  return { restored, skipped };
+}
+
 // ---- reel ideas -----------------------------------------------------------------------------------------
 
 const REEL_MODEL = 'claude-sonnet-5-5';
@@ -608,7 +874,8 @@ const voiceFor = (ws: Workspace) => (/greene|glg/i.test(ws.name) ? VOICES.glg : 
 /** The sorted clips as lines Claude can read (c1, c2, ...), grouped by the day they were filmed, newest first. */
 export async function catalogFor(orgId: string, ws: Workspace, day?: string) {
   const params: unknown[] = [orgId];
-  const where = ['c.org_id=$1', inWorkspace(ws, 'c', params), "c.status='sorted'", 'c.duplicate_of IS NULL'];
+  // Reels and B-roll are cut from video; photos are filed but never offered as footage.
+  const where = ['c.org_id=$1', inWorkspace(ws, 'c', params), "c.status='sorted'", 'c.duplicate_of IS NULL', "c.kind='video'"];
   if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
     params.push(day);
     where.push(`c.shot_date = $${params.length}::date`);

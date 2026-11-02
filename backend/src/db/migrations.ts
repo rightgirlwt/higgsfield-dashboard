@@ -365,6 +365,14 @@ CREATE TABLE vault_reels (
 CREATE INDEX vault_reels_idx ON vault_reels(org_id, created_at DESC);
 `,
   },
+  {
+    version: 7,
+    name: 'vault_photos',
+    // The Vault holds photos as well as videos. Everything already there is a video.
+    sql: `
+ALTER TABLE vault_clips ADD COLUMN kind text NOT NULL DEFAULT 'video' CHECK (kind IN ('video','photo'));
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

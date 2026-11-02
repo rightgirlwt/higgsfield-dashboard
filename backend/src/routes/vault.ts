@@ -6,7 +6,7 @@ import { reelToEdit } from '../services/brollPlan';
 import { signVaultLink } from '../services/sourceLinks';
 import { MAX_UPLOAD_BYTES } from '../services/effects';
 import {
-  clipExists, clipPatch, deleteClip, deleteReel, getVaultJob, listClips, listDays, listReels, saveVaultUpload, scanFolder, setReelStatus, sortClips, suggestReels, updateClip, UPLOAD_TYPES, VAULT_FOLDERS, vaultStats,
+  clipExists, clipPatch, deleteClip, deleteReel, getVaultJob, lastMove, listClips, listDays, listReels, organizeFiles, saveVaultUpload, scanFolder, setReelStatus, sortClips, suggestReels, undoMove, updateClip, UPLOAD_TYPES, VAULT_FOLDERS, vaultStats,
 } from '../services/vault';
 
 export const vault = Router();
@@ -27,7 +27,7 @@ vault.get(
   wrap(async (req, res) => {
     res.json(
       await listClips(req.user!.orgId, req.workspace!, {
-        ids: str(req.query.ids)?.split(',').filter(Boolean), folder: str(req.query.folder), day: str(req.query.day), q: str(req.query.q), duplicates: str(req.query.duplicates), unsorted: req.query.unsorted === '1',
+        ids: str(req.query.ids)?.split(',').filter(Boolean), folder: str(req.query.folder), day: str(req.query.day), q: str(req.query.q), kind: str(req.query.kind), duplicates: str(req.query.duplicates), unsorted: req.query.unsorted === '1',
         limit: Number(req.query.limit) || undefined, offset: Number(req.query.offset) || undefined,
       }),
     );
@@ -80,7 +80,7 @@ vault.post(
   express.raw({ type: (req) => Object.keys(UPLOAD_TYPES).includes(typeOf(req)), limit: MAX_UPLOAD_BYTES }),
   wrap(async (req, res) => {
     const body = req.body as Buffer;
-    if (!Buffer.isBuffer(body)) throw new HttpError(415, 'Use an MP4, MOV or WebM video.', 'unsupported');
+    if (!Buffer.isBuffer(body)) throw new HttpError(415, 'Use an MP4, MOV or WebM video, or a JPG, PNG, WebP or HEIC photo.', 'unsupported');
     const modified = Number(req.query.modified);
     const r = await saveVaultUpload({
       orgId: req.user!.orgId, workspaceId: req.workspace!.id, body, contentType: typeOf(req), name: String(req.query.filename ?? 'clip'),
@@ -96,7 +96,39 @@ vault.get(
   wrap(async (req, res) => {
     const job = getVaultJob(req.params.id);
     if (!job) throw notFound('That job is not known (the server may have restarted)');
-    res.json(job);
+    // `since` is how many log entries the page already has, so each poll carries only the new ones.
+    const since = Math.max(0, Math.floor(Number(req.query.since)) || 0);
+    res.json({ ...job, log: job.log.slice(since), logged: job.log.length });
+  }),
+);
+
+/**
+ * Puts the sorted files from your folders into real folders on this computer, Photos and Videos each with a folder per topic.
+ * Admin only, like reading a folder. Step 1 (approved: false) is free and says exactly what would happen; step 2 does it.
+ */
+vault.post(
+  '/organize',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    const b = z.object({ destRoot: z.string().trim().min(1).max(500), mode: z.enum(['copy', 'move']).default('copy'), approved: z.boolean().default(false) }).parse(req.body);
+    const r = await organizeFiles(req.user!.orgId, req.workspace!, b);
+    res.status(r.approved ? 202 : 200).json(r.approved ? r.job : r);
+  }),
+);
+
+vault.get(
+  '/organize/last',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    res.json(await lastMove(req.user!.orgId));
+  }),
+);
+
+vault.post(
+  '/organize/:id/undo',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    res.json(await undoMove(req.user!.orgId, id(req)));
   }),
 );
 
