@@ -10,12 +10,14 @@ import { seedDemo } from '../src/db/seed';
 import { engagementRate, metricsFrom } from '../src/services/metrics';
 
 const GOOD = 'IGAAtestTOKENgood0123456789abcdef';
+const FB = 'EAABtestFACEBOOKtoken0123456789abcdef';
 const DAY = 86_400_000;
 const ago = (d: number) => new Date(Date.now() - d * DAY).toISOString();
 
 /** A stand-in for graph.instagram.com. Every request is written down so the tests can see exactly what was asked. */
 const fake = {
   token: GOOD,
+  pages: ['17841400000000011', '17841400000000012'],
   followers: 1200,
   requests: [] as { path: string; metric?: string }[],
   reelReach: 5000,
@@ -45,7 +47,20 @@ beforeAll(async () => {
     const u = new URL(req.url ?? '/', 'http://x');
     const send = (code: number, body: unknown) => (res.writeHead(code, { 'content-type': 'application/json' }), res.end(JSON.stringify(body)));
     fake.requests.push({ path: u.pathname, metric: u.searchParams.get('metric') ?? undefined });
-    if (fake.expired || u.searchParams.get('access_token') !== fake.token) return send(400, { error: { message: `Invalid OAuth access token ${u.searchParams.get('access_token')}`, type: 'OAuthException', code: 190 } });
+    const sent = u.searchParams.get('access_token');
+    if (sent === FB && !fake.expired) {
+      // the Facebook side (Meta's Unified login): the account is named by its own id, never "me"
+      if (u.pathname === '/me/accounts') return send(200, { data: fake.pages.map((id) => ({ id: `page${id}`, instagram_business_account: { id } })) });
+      const acct = /^\/(\d{10,})(\/media|\/insights)?$/.exec(u.pathname);
+      if (acct && acct[2] === '/media') return send(200, { data: fake.media });
+      if (acct && acct[2] === '/insights') return send(200, { data: [{ name: 'reach', period: 'day', values: [{ value: 650, end_time: new Date(Date.now() - DAY + 12 * 3_600_000).toISOString() }] }] });
+      if (acct) return acct[1].endsWith('9') ? send(400, { error: { message: 'Unsupported get request. Object does not exist', code: 100 } }) : send(200, { id: acct[1], username: `acct${acct[1].slice(-2)}`, name: 'Right Girl Media', followers_count: 500, follows_count: 10, media_count: 3, profile_picture_url: 'https://cdn.example/p.jpg' });
+      const m2 = /^\/(m\d)\/insights$/.exec(u.pathname);
+      if (m2) return send(200, insightsOf(m2[1], (u.searchParams.get('metric') ?? '').split(',')));
+      return send(404, { error: { message: 'Unknown path', code: 803 } });
+    }
+    if (u.pathname === '/me/accounts' || /^\/\d{10,}/.test(u.pathname)) return send(400, { error: { message: `Invalid OAuth access token ${sent}`, type: 'OAuthException', code: 190 } });
+    if (fake.expired || sent !== fake.token) return send(400, { error: { message: `Invalid OAuth access token ${sent}`, type: 'OAuthException', code: 190 } });
     if (u.pathname === '/me') return send(200, { user_id: '17841400000000001', username: 'rightgirlmedia', name: 'Right Girl Media', followers_count: fake.followers, follows_count: 300, media_count: 3, profile_picture_url: 'https://cdn.example/p.jpg' });
     if (u.pathname === '/refresh_access_token') return send(200, { access_token: fake.token, token_type: 'bearer', expires_in: 5_184_000 });
     if (u.pathname === '/me/media') {
@@ -65,6 +80,7 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => graphServer.listen(0, r));
   config.instagramGraphBase = `http://127.0.0.1:${(graphServer.address() as AddressInfo).port}`;
+  config.facebookGraphBase = config.instagramGraphBase;
 });
 afterAll(async () => {
   await new Promise((r) => graphServer.close(r));
@@ -126,7 +142,9 @@ describe('Metrics end to end, against a fake Instagram', () => {
     expect(res.status).toBe(201);
     const text = await res.text();
     expect(text).not.toContain(GOOD); // the token never goes back to the page
-    const j = JSON.parse(text) as { account: { id: string; username: string; followers: number; tokenExpiresAt: string; tokenLast4: string }; posts: number; withoutInsights: string[] };
+    const all = JSON.parse(text) as { accounts: { account: { id: string; username: string; followers: number; tokenExpiresAt: string; tokenLast4: string }; posts: number; withoutInsights: string[] }[] };
+    expect(all.accounts).toHaveLength(1);
+    const j = all.accounts[0];
     accountId = j.account.id;
     expect(j.account).toMatchObject({ username: 'rightgirlmedia', followers: 1200, tokenLast4: GOOD.slice(-4) });
     expect(j.account.tokenExpiresAt).toBeTruthy(); // the refresh told us when it runs out
@@ -215,5 +233,55 @@ describe('Metrics end to end, against a fake Instagram', () => {
     expect((await db.query('SELECT 1 FROM ig_posts')).rows).toHaveLength(0);
     expect((await db.query('SELECT 1 FROM ig_snapshots')).rows).toHaveLength(0);
     expect((await call(member, 'GET', `/metrics/accounts/${accountId}/overview`)).status).toBe(404);
+  });
+
+  describe('a Facebook-side token (Meta\'s Unified login)', () => {
+    type Conn = { accounts: { account: { id: string; username: string; tokenExpiresAt: string | null }; posts: number; error?: string }[] };
+
+    it('finds every Instagram account the token reaches, reads each through the facebook side, and never tries to refresh', async () => {
+      fake.requests.length = 0;
+      const res = await call(admin, 'POST', '/metrics/accounts', { token: FB });
+      expect(res.status).toBe(201);
+      const text = await res.text();
+      expect(text).not.toContain(FB);
+      const j = JSON.parse(text) as Conn;
+      expect(j.accounts.map((a) => a.account.username).sort()).toEqual(['acct11', 'acct12']);
+      expect(j.accounts.every((a) => a.posts === 3 && a.account.tokenExpiresAt === null)).toBe(true); // system tokens do not expire
+      const paths = fake.requests.map((q) => q.path);
+      expect(paths).toContain('/me/accounts');
+      expect(paths).toContain('/17841400000000011/media'); // named by its own id
+      expect(paths).not.toContain('/me/media');
+      expect(paths).not.toContain('/refresh_access_token');
+      expect((await db.query<{ api: string }>('SELECT DISTINCT api FROM ig_accounts')).rows).toEqual([{ api: 'facebook' }]);
+      const list = await json<{ id: string; username: string }[]>(await call(member, 'GET', '/metrics/accounts'));
+      expect(list).toHaveLength(2);
+      // refreshing one later uses the same route and its numbers come through
+      const again = await call(member, 'POST', `/metrics/accounts/${list[0].id}/sync`, {});
+      expect(again.status).toBe(200);
+      const posts = await json<{ metrics: Record<string, number> }[]>(await call(member, 'GET', `/metrics/accounts/${list[0].id}/posts?sort=reach`));
+      expect(posts[0].metrics.reach).toBe(6500);
+    });
+
+    it('takes the account ID when the token cannot list accounts on its own', async () => {
+      fake.pages = [];
+      const none = await call(admin, 'POST', '/metrics/accounts', { token: FB });
+      expect(none.status).toBe(400);
+      expect((await json<{ error: { message: string } }>(none)).error.message).toMatch(/Paste the Instagram account ID too/);
+      const one = await call(admin, 'POST', '/metrics/accounts', { token: FB, igUserId: '17841400000000013' });
+      expect(one.status).toBe(201);
+      expect((await json<Conn>(one)).accounts.map((a) => a.account.username)).toEqual(['acct13']);
+      // a wrong ID is said plainly, and a bad shape is refused before anything is asked
+      const wrong = await call(admin, 'POST', '/metrics/accounts', { token: FB, igUserId: '17841400000000019' });
+      expect(wrong.status).toBe(400);
+      expect((await call(admin, 'POST', '/metrics/accounts', { token: FB, igUserId: 'rightgirl_media' })).status).toBe(400);
+    });
+
+    it('says the token was refused when neither side accepts it, without repeating it', async () => {
+      const r = await call(admin, 'POST', '/metrics/accounts', { token: 'EAABwrongFACEBOOKtoken0123456789abc' });
+      expect(r.status).toBe(400);
+      const msg = (await json<{ error: { message: string } }>(r)).error.message;
+      expect(msg).toMatch(/did not accept that token/);
+      expect(msg).not.toContain('EAABwrong');
+    });
   });
 });

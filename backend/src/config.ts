@@ -46,6 +46,8 @@ export const config = {
   studyDir: env.STUDY_DIR ?? './.data/study',
   /** Instagram's API for accounts that connect with an Instagram token (Metrics). Overridden in tests. */
   instagramGraphBase: env.INSTAGRAM_GRAPH_BASE ?? 'https://graph.instagram.com',
+  /** ...and for accounts connected through Meta's Unified login (a token read through graph.facebook.com). */
+  facebookGraphBase: env.FACEBOOK_GRAPH_BASE ?? 'https://graph.facebook.com/v26.0',
   /** Fonts the team adds for captions (.ttf or .otf). Kept in the project so everyone who pulls has them. */
   fontsDir: env.FONTS_DIR ?? path.resolve(process.cwd(), '..', 'fonts'),
 

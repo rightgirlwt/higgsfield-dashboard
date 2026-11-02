@@ -27,8 +27,21 @@ export class GraphError extends Error {
 /** Metrics a post's insights can return, as numbers. Anything else in the answer is ignored. */
 export type PostMetrics = Record<string, number>;
 
-async function graph<T = Record<string, unknown>>(token: string, pathname: string, params: Record<string, string | number> = {}): Promise<T> {
-  const url = new URL(config.instagramGraphBase.replace(/\/$/, '') + pathname);
+/**
+ * Where an account is read from. An "instagram" token goes to graph.instagram.com and the account is "me".
+ * A "facebook" token (the Unified login kind that Meta gives newer apps) goes to graph.facebook.com and needs the account's own id.
+ */
+export interface Conn {
+  api: 'instagram' | 'facebook';
+  token: string;
+  id: string;
+}
+const baseOf = (api: Conn['api']) => (api === 'facebook' ? config.facebookGraphBase : config.instagramGraphBase);
+const connOf = (a: { api: Conn['api']; ig_user_id: string }, token: string): Conn => ({ api: a.api, token, id: a.api === 'facebook' ? a.ig_user_id : 'me' });
+
+export async function graph<T = Record<string, unknown>>(c: Pick<Conn, 'api' | 'token'>, pathname: string, params: Record<string, string | number> = {}): Promise<T> {
+  const token = c.token;
+  const url = new URL(baseOf(c.api).replace(/\/$/, '') + pathname);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   url.searchParams.set('access_token', token);
   let res: Response;
@@ -47,9 +60,9 @@ async function graph<T = Record<string, unknown>>(token: string, pathname: strin
 }
 
 /** Expired or revoked token (190), or the account lost the permission. */
-const tokenProblem = (e: unknown) => e instanceof GraphError && (e.code === 190 || e.code === 102 || e.status === 401);
+export const tokenProblem = (e: unknown) => e instanceof GraphError && (e.code === 190 || e.code === 102 || e.status === 401);
 /** Instagram asked the app to slow down. */
-const rateLimited = (e: unknown) => e instanceof GraphError && [4, 17, 32, 613, 80002].includes(e.code);
+export const rateLimited = (e: unknown) => e instanceof GraphError && [4, 17, 32, 613, 80002].includes(e.code);
 
 interface Profile {
   user_id?: string;
@@ -61,8 +74,6 @@ interface Profile {
   media_count?: number;
   profile_picture_url?: string;
 }
-
-const profileOf = (token: string) => graph<Profile>(token, '/me', { fields: 'user_id,username,name,followers_count,follows_count,media_count,profile_picture_url' });
 
 interface MediaItem {
   id: string;
@@ -77,11 +88,11 @@ interface MediaItem {
   media_url?: string;
 }
 
-async function mediaList(token: string, limit: number): Promise<MediaItem[]> {
+async function mediaList(c: Conn, limit: number): Promise<MediaItem[]> {
   const out: MediaItem[] = [];
   let after = '';
   while (out.length < limit) {
-    const page = await graph<{ data?: MediaItem[]; paging?: { cursors?: { after?: string }; next?: string } }>(token, '/me/media', {
+    const page = await graph<{ data?: MediaItem[]; paging?: { cursors?: { after?: string }; next?: string } }>(c, `/${c.id}/media`, {
       fields: 'id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count,thumbnail_url,media_url',
       limit: Math.min(25, limit - out.length),
       ...(after ? { after } : {}),
@@ -112,18 +123,18 @@ export function metricsFrom(rows: InsightRow[] | undefined): PostMetrics {
  * One post's insights. All the metrics in one call; if Instagram refuses one of them for this account or post type (the list
  * changes between versions), ask one at a time and remember the refused ones so later posts do not ask again.
  */
-async function insightsFor(token: string, mediaId: string, wanted: string[], refused: Set<string>): Promise<PostMetrics> {
+async function insightsFor(c: Conn, mediaId: string, wanted: string[], refused: Set<string>): Promise<PostMetrics> {
   const ask = wanted.filter((m) => !refused.has(m));
   if (ask.length === 0) return {};
   try {
-    return metricsFrom((await graph<{ data?: InsightRow[] }>(token, `/${mediaId}/insights`, { metric: ask.join(',') })).data);
+    return metricsFrom((await graph<{ data?: InsightRow[] }>(c, `/${mediaId}/insights`, { metric: ask.join(',') })).data);
   } catch (e) {
     if (tokenProblem(e) || rateLimited(e) || !(e instanceof GraphError)) throw e;
   }
   const out: PostMetrics = {};
   for (const m of ask) {
     try {
-      Object.assign(out, metricsFrom((await graph<{ data?: InsightRow[] }>(token, `/${mediaId}/insights`, { metric: m })).data));
+      Object.assign(out, metricsFrom((await graph<{ data?: InsightRow[] }>(c, `/${mediaId}/insights`, { metric: m })).data));
     } catch (e) {
       if (tokenProblem(e) || rateLimited(e)) throw e;
       refused.add(m);
@@ -139,6 +150,7 @@ interface AccountRow {
   org_id: string;
   workspace_id: string | null;
   ig_user_id: string;
+  api: Conn['api'];
   username: string;
   name: string;
   picture: string;
@@ -153,7 +165,7 @@ interface AccountRow {
   created_at: string | Date;
 }
 
-const iso = (d: string | Date | null) => (d ? new Date(d).toISOString() : null);
+export const iso = (d: string | Date | null) => (d ? new Date(d).toISOString() : null);
 
 const presentAccount = (a: AccountRow) => ({
   id: a.id,
@@ -183,11 +195,12 @@ export async function listAccounts(orgId: string, ws: Workspace) {
 }
 
 const tokenShape = /^[A-Za-z0-9_\-.]{20,600}$/;
+const idShape = /^\d{5,25}$/;
 
-/** Asks Instagram for a fresh 60 days on the token. It refuses tokens under a day old; that is fine, the old one still works. */
-async function refreshToken(a: AccountRow, token: string): Promise<{ token: string; expiresAt: Date | null }> {
+/** Asks Instagram for a fresh 60 days on an Instagram-login token. It refuses tokens under a day old; that is fine, the old one still works. */
+async function refreshToken(a: Pick<AccountRow, 'id' | 'token_expires_at'>, token: string): Promise<{ token: string; expiresAt: Date | null }> {
   try {
-    const r = await graph<{ access_token?: string; expires_in?: number }>(token, '/refresh_access_token', { grant_type: 'ig_refresh_token' });
+    const r = await graph<{ access_token?: string; expires_in?: number }>({ api: 'instagram', token }, '/refresh_access_token', { grant_type: 'ig_refresh_token' });
     const expiresAt = typeof r.expires_in === 'number' ? new Date(Date.now() + r.expires_in * 1000) : null;
     return { token: r.access_token || token, expiresAt };
   } catch (e) {
@@ -196,31 +209,86 @@ async function refreshToken(a: AccountRow, token: string): Promise<{ token: stri
   }
 }
 
-/** Checks the token works, keeps it (encrypted) and reads the account for the first time. */
-export async function connectAccount(orgId: string, ws: Workspace, rawToken: string) {
-  const token = rawToken.trim();
-  if (!tokenShape.test(token)) throw badRequest('That does not look like an Instagram access token. Paste only the token itself, with no spaces or quotes.');
-  let me: Profile;
-  try {
-    me = await profileOf(token);
-  } catch (e) {
-    if (e instanceof GraphError) throw badRequest(`Instagram did not accept that token: ${e.message}`);
-    throw e;
+const PROFILE_FIELDS = 'username,name,followers_count,follows_count,media_count,profile_picture_url';
+const profileOf = (c: Conn) => graph<Profile>(c, `/${c.id}`, { fields: c.api === 'instagram' ? `user_id,${PROFILE_FIELDS}` : `id,${PROFILE_FIELDS}` });
+
+type Found = { api: Conn['api']; id: string; me: Profile };
+
+/** An Instagram-login token knows whose it is. */
+async function viaInstagram(token: string): Promise<Found[]> {
+  const me = await profileOf({ api: 'instagram', token, id: 'me' });
+  const id = me.user_id ?? me.id;
+  if (!id || !me.username) throw badRequest('Instagram did not say whose token this is. Make sure it is for a professional (Business or Creator) account.');
+  return [{ api: 'instagram', id, me }];
+}
+
+/**
+ * A Facebook-side token (what Meta's Unified login gives newer apps) is asked which Instagram accounts it can reach, one per Page
+ * they are connected to, unless the account's id is given. One such token can serve several accounts.
+ */
+async function viaFacebook(token: string, igUserId?: string): Promise<Found[]> {
+  let ids: string[];
+  if (igUserId) ids = [igUserId];
+  else {
+    const r = await graph<{ data?: { instagram_business_account?: { id?: string } }[] }>({ api: 'facebook', token }, '/me/accounts', { fields: 'instagram_business_account{id}', limit: 100 });
+    ids = [...new Set((r.data ?? []).map((p) => p.instagram_business_account?.id).filter((x): x is string => !!x))];
+    if (ids.length === 0) throw badRequest('That token works, but it could not find an Instagram account on its own. Paste the Instagram account ID too (Meta Business Settings, Accounts, Instagram accounts).');
   }
-  const igId = me.user_id ?? me.id;
-  if (!igId || !me.username) throw badRequest('Instagram did not say whose token this is. Make sure it is an Instagram token for a professional (Business or Creator) account.');
-  const { rows } = await getDb().query<AccountRow>(
-    `INSERT INTO ig_accounts (org_id, workspace_id, ig_user_id, username, name, picture, followers, follows, media_count, token_cipher, token_last4)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     ON CONFLICT (org_id, ig_user_id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id, username=EXCLUDED.username, name=EXCLUDED.name, picture=EXCLUDED.picture,
-       followers=EXCLUDED.followers, follows=EXCLUDED.follows, media_count=EXCLUDED.media_count, token_cipher=EXCLUDED.token_cipher, token_last4=EXCLUDED.token_last4, last_error=''
-     RETURNING *`,
-    [orgId, ws.id, igId, me.username, me.name ?? '', me.profile_picture_url ?? '', me.followers_count ?? null, me.follows_count ?? null, me.media_count ?? null, encryptSecret(token), last4(token)],
-  );
-  const acct = rows[0];
-  const fresh = await refreshToken(acct, token);
-  await getDb().query('UPDATE ig_accounts SET token_cipher=$3, token_last4=$4, token_expires_at=$5 WHERE id=$1 AND org_id=$2', [acct.id, orgId, encryptSecret(fresh.token), last4(fresh.token), fresh.expiresAt]);
-  return syncAccount(orgId, acct.id);
+  const out: Found[] = [];
+  for (const id of ids) {
+    const me = await profileOf({ api: 'facebook', token, id });
+    if (!me.username) throw badRequest(`Instagram did not return an account for ID ${id}. Check the number, and that the account is Business or Creator.`);
+    out.push({ api: 'facebook', id: me.id ?? id, me });
+  }
+  return out;
+}
+
+/** Checks the token works, keeps it (encrypted) and reads each account it reaches for the first time. */
+export async function connectAccount(orgId: string, ws: Workspace, rawToken: string, igUserId?: string) {
+  const token = rawToken.trim();
+  const given = igUserId?.trim() || undefined;
+  if (!tokenShape.test(token)) throw badRequest('That does not look like an access token. Paste only the token itself, with no spaces or quotes.');
+  if (given && !idShape.test(given)) throw badRequest('The Instagram account ID is a number of 15 to 17 digits. Paste only the number.');
+  // Instagram-login tokens start with IG; try the matching side first so the other side's complaint is not what the person reads
+  const attempts = (token.startsWith('IG') && !given ? [viaInstagram, viaFacebook] : [viaFacebook, viaInstagram]) as ((t: string, id?: string) => Promise<Found[]>)[];
+  let found: Found[] | null = null;
+  let firstError: unknown;
+  for (const attempt of attempts) {
+    try {
+      found = await attempt(token, given);
+      break;
+    } catch (e) {
+      firstError ??= e;
+      if (!(e instanceof GraphError) && !(e instanceof HttpError && e.status < 500)) throw e;
+    }
+  }
+  if (!found) {
+    if (firstError instanceof GraphError) throw badRequest(`Instagram did not accept that token: ${firstError.message}`);
+    throw firstError;
+  }
+  const results = [];
+  for (const f of found) {
+    const { rows } = await getDb().query<AccountRow>(
+      `INSERT INTO ig_accounts (org_id, workspace_id, ig_user_id, api, username, name, picture, followers, follows, media_count, token_cipher, token_last4)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (org_id, ig_user_id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id, api=EXCLUDED.api, username=EXCLUDED.username, name=EXCLUDED.name, picture=EXCLUDED.picture,
+         followers=EXCLUDED.followers, follows=EXCLUDED.follows, media_count=EXCLUDED.media_count, token_cipher=EXCLUDED.token_cipher, token_last4=EXCLUDED.token_last4, last_error=''
+       RETURNING *`,
+      [orgId, ws.id, f.id, f.api, f.me.username, f.me.name ?? '', f.me.profile_picture_url ?? '', f.me.followers_count ?? null, f.me.follows_count ?? null, f.me.media_count ?? null, encryptSecret(token), last4(token)],
+    );
+    const acct = rows[0];
+    if (f.api === 'instagram') {
+      const fresh = await refreshToken(acct, token);
+      await getDb().query('UPDATE ig_accounts SET token_cipher=$3, token_last4=$4, token_expires_at=$5 WHERE id=$1 AND org_id=$2', [acct.id, orgId, encryptSecret(fresh.token), last4(fresh.token), fresh.expiresAt]);
+    }
+    // one account failing to read must not hide the others that connected
+    try {
+      results.push(await syncAccount(orgId, acct.id));
+    } catch (e) {
+      results.push({ account: presentAccount(await loadAccount(orgId, acct.id)), posts: 0, withoutInsights: [] as string[], error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { accounts: results };
 }
 
 export async function removeAccount(orgId: string, id: string) {
@@ -230,23 +298,24 @@ export async function removeAccount(orgId: string, id: string) {
 
 // ---- syncing --------------------------------------------------------------------------------------------------
 
-async function pool<T>(items: T[], width: number, work: (item: T) => Promise<void>): Promise<void> {
+export async function pool<T>(items: T[], width: number, work: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => { while (next < items.length) await work(items[next++]); }));
 }
 
-const sameMetrics = (a: PostMetrics, b: PostMetrics) => {
+export const sameMetrics = (a: PostMetrics, b: PostMetrics) => {
   const ka = Object.keys(a);
   return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
 };
 
-const inDays = (d: number) => new Date(Date.now() + d * 86_400_000);
+export const inDays = (d: number) => new Date(Date.now() + d * 86_400_000);
 
 /** Reads the profile, the newest posts and each post's insights, and stores a snapshot where the numbers changed. */
 export async function syncAccount(orgId: string, id: string, o: { posts?: number } = {}) {
   const db = getDb();
   let a = await loadAccount(orgId, id);
   let token = decryptSecret(a.token_cipher);
+  const conn = (): Conn => connOf(a, token);
   const fail = async (e: unknown): Promise<never> => {
     const msg = tokenProblem(e) ? 'Instagram no longer accepts this token (it expired or was revoked). Connect the account again with a new token.' : e instanceof Error ? e.message : String(e);
     await db.query('UPDATE ig_accounts SET last_error=$3 WHERE id=$1 AND org_id=$2', [id, orgId, msg]);
@@ -254,13 +323,13 @@ export async function syncAccount(orgId: string, id: string, o: { posts?: number
     throw badRequest(rateLimited(e) ? 'Instagram asked us to slow down. Try again in a few minutes.' : msg);
   };
   try {
-    // keep the token alive: refresh when its expiry is unknown or near
-    if (!a.token_expires_at || new Date(a.token_expires_at).getTime() < inDays(14).getTime()) {
+    // keep an Instagram-login token alive: refresh when its expiry is unknown or near (Facebook-side system tokens do not expire)
+    if (a.api === 'instagram' && (!a.token_expires_at || new Date(a.token_expires_at).getTime() < inDays(14).getTime())) {
       const fresh = await refreshToken(a, token);
       token = fresh.token;
       await db.query('UPDATE ig_accounts SET token_cipher=$3, token_last4=$4, token_expires_at=$5 WHERE id=$1 AND org_id=$2', [id, orgId, encryptSecret(token), last4(token), fresh.expiresAt]);
     }
-    const me = await profileOf(token);
+    const me = await profileOf(conn());
     await db.query('UPDATE ig_accounts SET username=COALESCE($3,username), name=$4, picture=$5, followers=$6, follows=$7, media_count=$8 WHERE id=$1 AND org_id=$2', [
       id, orgId, me.username ?? null, me.name ?? '', me.profile_picture_url ?? '', me.followers_count ?? null, me.follows_count ?? null, me.media_count ?? null,
     ]);
@@ -268,12 +337,12 @@ export async function syncAccount(orgId: string, id: string, o: { posts?: number
       await db.query(`INSERT INTO ig_account_days (account_id, day, followers) VALUES ($1, CURRENT_DATE, $2) ON CONFLICT (account_id, day) DO UPDATE SET followers=EXCLUDED.followers`, [id, me.followers_count]);
     }
 
-    const media = await mediaList(token, Math.min(MAX_POSTS, Math.max(5, o.posts ?? DEFAULT_POSTS)));
+    const media = await mediaList(conn(), Math.min(MAX_POSTS, Math.max(5, o.posts ?? DEFAULT_POSTS)));
     const refused = { reel: new Set<string>(), feed: new Set<string>() };
     let updated = 0;
     await pool(media, 4, async (m) => {
       const reel = m.media_product_type === 'REELS';
-      const insights = await insightsFor(token, m.id, reel ? REEL_METRICS : FEED_METRICS, reel ? refused.reel : refused.feed);
+      const insights = await insightsFor(conn(), m.id, reel ? REEL_METRICS : FEED_METRICS, reel ? refused.reel : refused.feed);
       // the listing's own counts are the fallback when insights are not available for a post
       const metrics: PostMetrics = { ...(typeof m.like_count === 'number' ? { likes: m.like_count } : {}), ...(typeof m.comments_count === 'number' ? { comments: m.comments_count } : {}), ...insights };
       const { rows } = await db.query<{ id: string }>(
@@ -294,7 +363,7 @@ export async function syncAccount(orgId: string, id: string, o: { posts?: number
     // reach for the account, a day at a time (best effort: it needs the insights permission and enough followers)
     try {
       const since = Math.floor(Date.now() / 1000) - 28 * 86_400;
-      const r = await graph<{ data?: InsightRow[] }>(token, '/me/insights', { metric: 'reach', period: 'day', since, until: Math.floor(Date.now() / 1000) });
+      const r = await graph<{ data?: InsightRow[] }>(conn(), `/${conn().id}/insights`, { metric: 'reach', period: 'day', since, until: Math.floor(Date.now() / 1000) });
       for (const v of r.data?.[0]?.values ?? []) {
         if (typeof v.value !== 'number' || !v.end_time) continue;
         // Instagram stamps a day by when it ends; the day itself is the one before

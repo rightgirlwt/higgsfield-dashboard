@@ -1,11 +1,10 @@
 import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthGate } from './auth/AuthGate';
 import { Shell } from './components/Shell';
 import { Button, Spinner } from './components/ui';
 import { RealtimeProvider } from './state/Realtime';
 import { ToastProvider } from './state/Toast';
-import Overview from './pages/Overview';
 
 // Heavy pages (React Flow, charts, forms) are split out of the initial bundle.
 const Studio = lazy(() => import('./pages/Studio'));
@@ -20,7 +19,7 @@ const PromptStudio = lazy(() => import('./pages/PromptStudio'));
 const Workflows = lazy(() => import('./pages/Workflows'));
 const WorkflowBuilder = lazy(() => import('./pages/WorkflowBuilder'));
 const Media = lazy(() => import('./pages/Media'));
-const Monitoring = lazy(() => import('./pages/Monitoring'));
+const MonitoringHub = lazy(() => import('./pages/MonitoringHub'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 
 class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -43,6 +42,12 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
   }
 }
 
+/** Old addresses still work: Metrics moved to the home page, and Overview moved into Monitoring. */
+function MovedTo({ to }: { to: string }) {
+  const { search } = useLocation();
+  return <Navigate to={`${to}${search}`} replace />;
+}
+
 function NotFound() {
   return (
     <div className="mt-16 text-center">
@@ -62,7 +67,7 @@ export default function App() {
               <Suspense fallback={<div className="p-8"><Spinner /></div>}>
                 <Routes>
                   <Route element={<Shell />}>
-                    <Route index element={<Overview />} />
+                    <Route index element={<Metrics />} />
                     <Route path="projects" element={<Projects />} />
                     <Route path="projects/:id" element={<Project />} />
                     <Route path="studio" element={<Studio />} />
@@ -70,12 +75,13 @@ export default function App() {
                     <Route path="edit" element={<Edit />} />
                     <Route path="vault" element={<Vault />} />
                     <Route path="study" element={<StudySession />} />
-                    <Route path="metrics" element={<Metrics />} />
-                    <Route path="prompts"element={<PromptStudio />} />
+                    <Route path="metrics" element={<MovedTo to="/" />} />
+                    <Route path="overview" element={<MovedTo to="/monitoring" />} />
+                    <Route path="prompts" element={<PromptStudio />} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="workflows/:id" element={<WorkflowBuilder />} />
                     <Route path="media" element={<Media />} />
-                    <Route path="monitoring" element={<Monitoring />} />
+                    <Route path="monitoring" element={<MonitoringHub />} />
                     <Route path="settings" element={<SettingsPage />} />
                     <Route path="*" element={<NotFound />} />
                   </Route>

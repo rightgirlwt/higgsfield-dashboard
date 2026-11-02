@@ -503,7 +503,7 @@ const FALLBACK = 'Voice: bold, direct, warm, short punchy lines, one call to act
 const LEGAL =
   'This is the law firm account. Its legal advertising rules win over everything else: never a dollar amount, never "best", "#1" or "highest", never a promise of a result. Anything acted or staged needs a DRAMATIZATION label on screen (say so in "notes"). End any caption about a result with "Prior results do not guarantee a similar outcome."';
 
-const scriptSystem = (ws: Workspace) => [SCRIPT_TASK, voiceRules(ws.name) || FALLBACK, isLegalWorkspace(ws.name) ? LEGAL : ''].filter(Boolean).join('\n\n');
+const scriptSystem = (ws: Workspace) => [SCRIPT_TASK, voiceRules(ws.name) || FALLBACK, ws.voice.trim() ? `How this account sounds, in the owner's words (these win over the general rules above where they differ): ${ws.voice.trim()}` : '', isLegalWorkspace(ws.name) ? LEGAL : ''].filter(Boolean).join('\n\n');
 
 /** Free: what a script would cost. Nothing is spent until `approved`. */
 export async function scriptFromStudy(orgId: string, ws: Workspace, id: string, o: { topic: string; approved: boolean }) {

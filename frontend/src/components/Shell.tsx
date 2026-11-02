@@ -1,9 +1,9 @@
-import { Activity, BarChart3, Bell, Camera, Clapperboard, FolderOpen, GraduationCap, LayoutGrid, LogOut, Menu, MessageSquareText, Mic, Moon, Search, Settings, Sparkles, Sun, Wand2, Workflow, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, Camera, Clapperboard, FolderOpen, GraduationCap, LogOut, Menu, Mic, Moon, Search, Settings, Sparkles, Sun, Wand2, X, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/context';
 import { api, setWorkspaceId } from '../lib/api';
-import { ms, timeAgo } from '../lib/format';
+import { timeAgo } from '../lib/format';
 import { useApi } from '../lib/hooks';
 import { useTheme } from '../lib/theme';
 import type { Alert } from '../lib/types';
@@ -11,22 +11,34 @@ import { useRealtime } from '../state/Realtime';
 import { SearchPalette } from './SearchPalette';
 import { Badge, Button, cx, IconButton } from './ui';
 
-const nav = [
-  { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
-  { to: '/projects', label: 'Projects', icon: Clapperboard },
-  { to: '/studio', label: 'Studio', icon: Sparkles },
-  { to: '/voices', label: 'Voices', icon: Mic },
+interface NavItem {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  end?: boolean;
+  /** Shown indented under it, always. */
+  children?: { to: string; label: string; icon: LucideIcon }[];
+}
+
+/** Metrics is the home page. Overview lives inside Monitoring; Prompts and Workflows live inside Settings. */
+const nav: NavItem[] = [
+  { to: '/', label: 'Metrics', icon: BarChart3, end: true },
+  {
+    to: '/studio',
+    label: 'Studio',
+    icon: Sparkles,
+    children: [
+      { to: '/edit', label: 'Editing', icon: Wand2 },
+      { to: '/voices', label: 'Voices', icon: Mic },
+      { to: '/media', label: 'Media', icon: Camera },
+      { to: '/projects', label: 'Projects', icon: Clapperboard },
+    ],
+  },
   { to: '/vault', label: 'Vault', icon: FolderOpen },
   { to: '/study', label: 'Study', icon: GraduationCap },
-  { to: '/metrics', label: 'Metrics', icon: BarChart3 },
-  { to: '/edit', label: 'Editing', icon: Wand2 },
-  { to: '/prompts', label: 'Prompts', icon: MessageSquareText },
-  { to: '/workflows', label: 'Workflows', icon: Workflow },
-  { to: '/media', label: 'Media', icon: Camera },
   { to: '/monitoring', label: 'Monitoring', icon: Activity },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
-
 interface WorkspaceList {
   workspaces: { id: string; name: string }[];
   current: string;
@@ -35,13 +47,18 @@ interface WorkspaceList {
 /** Projects and the media library show one workspace at a time. Changing it reloads the page so every screen starts fresh. */
 function WorkspaceSwitcher() {
   const list = useApi<WorkspaceList>('/workspaces');
+  const { reload } = list;
+  useEffect(() => {
+    window.addEventListener('workspaces-changed', reload);
+    return () => window.removeEventListener('workspaces-changed', reload);
+  }, [reload]);
   if (!list.data || list.data.workspaces.length < 2) return null;
   const change = (id: string) => {
     setWorkspaceId(id);
     window.location.assign('/');
   };
   return (
-    <div className="mb-6">
+    <div className="mb-5">
       <label htmlFor="workspace" className="mb-1.5 block text-xs uppercase tracking-wider text-white/70">Workspace</label>
       <select
         id="workspace"
@@ -54,39 +71,6 @@ function WorkspaceSwitcher() {
         ))}
       </select>
     </div>
-  );
-}
-
-function SystemPanel() {
-  const { snapshot, connected } = useRealtime();
-  const health = snapshot?.apiHealthPct;
-  const healthTone = health === undefined ? 'text-slate-400' : health >= 99 ? 'text-emerald-400' : health >= 90 ? 'text-amber-300' : 'text-rose-400';
-  // Sits on the brand-coloured sidebar, so it uses white-on-translucent styling in both themes.
-  void healthTone;
-  return (
-    <section aria-label="System status" className="mt-auto rounded-2xl bg-white/12 p-4 text-white ring-1 ring-white/15">
-      <div className="mb-3 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/70">
-        <span>System</span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-white">
-          <span className={cx('h-1.5 w-1.5 rounded-full', connected ? 'bg-emerald-300' : 'bg-rose-300')} aria-hidden />
-          {connected ? 'Live' : 'Offline'}
-        </span>
-      </div>
-      <dl className="space-y-2.5 text-sm text-white/85">
-        <div className="flex items-center justify-between">
-          <dt>API health</dt>
-          <dd className="font-semibold text-white">{health === undefined ? '—' : `${health}%`}</dd>
-        </div>
-        <div className="flex items-center justify-between">
-          <dt>Latency</dt>
-          <dd className="font-semibold text-white">{snapshot ? ms(snapshot.latencyMs) : '—'}</dd>
-        </div>
-        <div className="flex items-center justify-between">
-          <dt>Queue</dt>
-          <dd className="font-semibold text-white">{snapshot ? `${snapshot.queueSize} job${snapshot.queueSize === 1 ? '' : 's'}` : '—'}</dd>
-        </div>
-      </dl>
-    </section>
   );
 }
 
@@ -172,25 +156,37 @@ export function Shell() {
   const link = ({ isActive }: { isActive: boolean }) =>
     cx('flex w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 text-left text-sm font-medium transition', isActive ? 'bg-white text-cyan-600 shadow-md' : 'text-white/80 hover:bg-white/12 hover:text-white');
 
+  // The pages under Studio: smaller and indented, same white pill when open.
+  const child = ({ isActive }: { isActive: boolean }) =>
+    cx('flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[13px] font-medium transition', isActive ? 'bg-white text-cyan-600 shadow-md' : 'text-white/75 hover:bg-white/12 hover:text-white');
+
   const sidebar = (
     <>
-      <div className="mb-8 flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white font-bold text-cyan-600 shadow-md" aria-hidden>H</div>
-        <div>
-          <div className="text-xs uppercase tracking-wider text-white/70">Studio</div>
-          <div className="text-lg font-semibold leading-tight text-white">Higgsfield</div>
-        </div>
+      <div className="mb-6 flex items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white font-bold text-cyan-600 shadow-md" aria-hidden>R</div>
+        <div className="text-lg font-semibold leading-tight text-white">RGM Dashboard</div>
       </div>
       <WorkspaceSwitcher />
-      <nav aria-label="Primary" className="space-y-1.5">
-        {nav.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={link} onClick={() => setMobileNav(false)}>
-            <Icon className="h-4 w-4" aria-hidden />
-            {label}
-          </NavLink>
+      <nav aria-label="Primary" className="space-y-1">
+        {nav.map(({ to, label, icon: Icon, end, children }) => (
+          <div key={to} className="space-y-1">
+            <NavLink to={to} end={end} className={link} onClick={() => setMobileNav(false)}>
+              <Icon className="h-4 w-4" aria-hidden />
+              {label}
+            </NavLink>
+            {children && (
+              <div className="ml-5 space-y-0.5 border-l border-white/20 pl-2.5">
+                {children.map(({ to: childTo, label: childLabel, icon: ChildIcon }) => (
+                  <NavLink key={childTo} to={childTo} className={child} onClick={() => setMobileNav(false)}>
+                    <ChildIcon className="h-3.5 w-3.5" aria-hidden />
+                    {childLabel}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
         ))}
       </nav>
-      <SystemPanel />
     </>
   );
 

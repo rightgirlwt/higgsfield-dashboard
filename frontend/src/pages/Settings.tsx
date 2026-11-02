@@ -1,15 +1,17 @@
 import { CheckCircle2, Download, KeyRound, Lock, Trash2, UserPlus } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth, useCan } from '../auth/context';
 import { Badge, Button, Card, CardHeader, ErrorState, Field, Input, PageHeader, Select, Skeleton, Tabs } from '../components/ui';
 import { PriceCheckCard } from '../components/PriceCheckCard';
+import { WorkspacesCard } from '../components/WorkspacesCard';
 import { api, errorMessage } from '../lib/api';
 import { price, timeAgo } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
 import type { Role, SecretStatus, SettingsData, StudioCatalog, TeamUser } from '../lib/types';
 import { useToast } from '../state/Toast';
 
-type Tab = 'models' | 'keys' | 'higgsfield' | 'storage' | 'team' | 'billing' | 'data';
+type Tab = 'models' | 'keys' | 'higgsfield' | 'storage' | 'team' | 'billing' | 'data' | 'workspaces' | 'tools';
 
 export default function SettingsPage() {
   useDocumentTitle('Settings');
@@ -30,13 +32,15 @@ export default function SettingsPage() {
             { id: 'higgsfield', label: 'Higgsfield' },
             { id: 'models', label: 'Claude models' },
             { id: 'storage', label: 'Storage' },
+            { id: 'workspaces', label: 'Workspaces' },
             { id: 'team', label: 'Team' },
             { id: 'billing', label: 'Billing & alerts' },
             { id: 'data', label: 'Data export' },
+            { id: 'tools', label: 'Prompts & workflows' },
           ]}
         />
       </div>
-      {!isAdmin && tab !== 'data' && tab !== 'team' && (
+      {!isAdmin && tab !== 'data' && tab !== 'team' && tab !== 'tools' && (
         <p role="note" className="mb-4 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300"><Lock className="h-4 w-4" aria-hidden /> Only admins can view or change this section.</p>
       )}
       {settings.error ? (
@@ -52,8 +56,30 @@ export default function SettingsPage() {
           {tab === 'team' && <Team />}
           {tab === 'billing' && isAdmin && <Billing s={settings.data} onSaved={settings.reload} />}
           {tab === 'data' && <DataExport />}
+          {tab === 'workspaces' && isAdmin && <WorkspacesCard />}
+          {tab === 'tools' && <Tools />}
         </>
       )}
+    </div>
+  );
+}
+
+/** Prompts and Workflows used to have their own sidebar items. They are still here, one click away. */
+function Tools() {
+  const items = [
+    { to: '/prompts', title: 'Prompt Studio', text: 'Write, version and compare Claude prompts, and run them.' },
+    { to: '/workflows', title: 'Workflows', text: 'Chain Claude and Higgsfield steps into something you can run again.' },
+  ];
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      {items.map((i) => (
+        <Link key={i.to} to={i.to} className="block rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500">
+          <Card className="h-full p-5 transition hover:border-cyan-500/50">
+            <CardHeader eyebrow="Open" title={i.title} />
+            <p className="mt-2 text-sm text-slate-400">{i.text}</p>
+          </Card>
+        </Link>
+      ))}
     </div>
   );
 }

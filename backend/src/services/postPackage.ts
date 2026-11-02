@@ -128,7 +128,7 @@ const FALLBACK =
 const LEGAL_NOTE =
   'This is the law firm account. The legal advertising rules in the Greene Legal Group section are strict and win over anything else: never a dollar amount, never "best", "#1" or "highest", never a promise of a result, and if the video talks about a result end the caption with "Prior results do not guarantee a similar outcome."';
 
-const systemFor = (workspaceName: string) => [TASK, voiceRules(workspaceName) || FALLBACK, isLegalWorkspace(workspaceName) ? LEGAL_NOTE : ''].filter(Boolean).join('\n\n');
+const systemFor = (workspaceName: string, voice = '') => [TASK, voiceRules(workspaceName) || FALLBACK, voice.trim() ? `How this account sounds, in the owner's words (these win over the general rules above where they differ): ${voice.trim()}` : '', isLegalWorkspace(workspaceName) ? LEGAL_NOTE : ''].filter(Boolean).join('\n\n');
 
 /** One click: Sonnet writes the caption, hashtags, cover second and pinned comment for a rendered draft. Cost is returned afterwards. */
 export async function makePackage(orgId: string, ws: Workspace, videoId: string, n: number, madeBy: string): Promise<{ package: PostPackage; costUsd: number; estimateUsd: number }> {
@@ -145,7 +145,7 @@ export async function makePackage(orgId: string, ws: Workspace, videoId: string,
     `Account: ${ws.name}\nVideo: ${video.title || video.name}\nLength: ${video.durationSec ?? 'unknown'} seconds\n` +
     `On-screen label: ${draft.plan.label.enabled ? draft.plan.label.text : 'none'}\n\n` +
     `What is said:\n${spoken || '(not transcribed)'}\n\nBeats (number | time | title | says):\n${beatLines.join('\n') || '(none)'}`;
-  const system = systemFor(ws.name);
+  const system = systemFor(ws.name, ws.voice);
   const maxTokens = 900;
   const ask = async (prompt: string) => {
     const res = await runPrompt(orgId, { model: MODEL, system, user: prompt, maxTokens });

@@ -858,6 +858,7 @@ const VOICES = {
     'Greene Legal Group (@thesuperlawyer), for injured people in Atlanta who do not know their rights. Authoritative, warm, community presence, short declarative lines, hooks with personal stakes. ' +
     'Never show or mention case results or dollar amounts. Anything staged or acted must carry an on-screen DRAMATIZATION label. One call to action only.',
   rgm: 'Right Girl Media: bold, direct, expert and warm. Short punchy lines, results-anchored, no fluff. One call to action only.',
+  plain: 'Plain, direct and warm. Short lines, concrete details, one call to action only. Never invent facts, numbers or results.',
 };
 
 const REEL_SYSTEM = (voice: string, count: number) =>
@@ -869,7 +870,13 @@ const REEL_SYSTEM = (voice: string, count: number) =>
   `Voice: ${voice} ` +
   `Return ${count} reels at most. Answer with only a JSON array of {"title","style":"vlog"|"topic","day":"YYYY-MM-DD" for vlog or null,"hook","beats":[{"clip","line","seconds"}],"caption","why"}, where "why" is one sentence on why it should work.`;
 
-export const voiceFor = (ws: Workspace) => (/greene|glg/i.test(ws.name) ? VOICES.glg : VOICES.rgm);
+/** The two starter accounts keep their built-in voices (the law firm's keeps its legal rules); her own notes are added to them. Any other workspace sounds like its notes. */
+export const voiceFor = (ws: Workspace) => {
+  const notes = ws.voice.trim();
+  if (/greene|glg/i.test(ws.name)) return notes ? `${VOICES.glg} Also: ${notes}` : VOICES.glg;
+  if (/right girl|rgm/i.test(ws.name)) return notes ? `${VOICES.rgm} Also: ${notes}` : VOICES.rgm;
+  return notes || VOICES.plain;
+};
 
 /** The sorted clips as lines Claude can read (c1, c2, ...), grouped by the day they were filmed, newest first. */
 export async function catalogFor(orgId: string, ws: Workspace, day?: string) {

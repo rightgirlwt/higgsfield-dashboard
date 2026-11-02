@@ -469,6 +469,95 @@ CREATE TABLE ig_account_days (
 );
 `,
   },
+  {
+    version: 11,
+    name: 'metrics_unified_login',
+    // Newer Meta apps can only use Unified login: its tokens are read through graph.facebook.com and name the account by its own id.
+    sql: `ALTER TABLE ig_accounts ADD COLUMN api text NOT NULL DEFAULT 'instagram' CHECK (api IN ('instagram','facebook'));`,
+  },
+  {
+    version: 12,
+    name: 'metrics_facebook_ads',
+    // Metrics beyond Instagram: Facebook Pages (their posts and a row a day of views, reach, engagement and follows) and ad accounts
+    // (a row a day per campaign). Tokens are kept encrypted, like the Instagram ones.
+    sql: `
+CREATE TABLE fb_pages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  page_id text NOT NULL,
+  name text NOT NULL,
+  picture text NOT NULL DEFAULT '',
+  followers integer,
+  token_cipher text NOT NULL,
+  token_last4 text NOT NULL DEFAULT '',
+  last_synced_at timestamptz,
+  last_error text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (org_id, page_id)
+);
+
+CREATE TABLE fb_posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  page_id uuid NOT NULL REFERENCES fb_pages(id) ON DELETE CASCADE,
+  post_id text NOT NULL,
+  permalink text NOT NULL DEFAULT '',
+  message text NOT NULL DEFAULT '',
+  kind text NOT NULL DEFAULT 'Post',
+  picture text NOT NULL DEFAULT '',
+  posted_at timestamptz,
+  metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+  synced_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (page_id, post_id)
+);
+CREATE INDEX fb_posts_idx ON fb_posts(page_id, posted_at DESC);
+
+CREATE TABLE fb_page_days (
+  page_id uuid NOT NULL REFERENCES fb_pages(id) ON DELETE CASCADE,
+  day date NOT NULL,
+  followers integer,
+  views integer,
+  reach integer,
+  engagements integer,
+  new_follows integer,
+  PRIMARY KEY (page_id, day)
+);
+
+CREATE TABLE ad_accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  account_id text NOT NULL,
+  name text NOT NULL,
+  currency text NOT NULL DEFAULT 'USD',
+  token_cipher text NOT NULL,
+  token_last4 text NOT NULL DEFAULT '',
+  last_synced_at timestamptz,
+  last_error text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (org_id, account_id)
+);
+
+CREATE TABLE ad_days (
+  ad_account_id uuid NOT NULL REFERENCES ad_accounts(id) ON DELETE CASCADE,
+  campaign_id text NOT NULL,
+  campaign_name text NOT NULL DEFAULT '',
+  day date NOT NULL,
+  spend double precision NOT NULL DEFAULT 0,
+  impressions integer NOT NULL DEFAULT 0,
+  reach integer NOT NULL DEFAULT 0,
+  clicks integer NOT NULL DEFAULT 0,
+  actions jsonb NOT NULL DEFAULT '{}'::jsonb,
+  PRIMARY KEY (ad_account_id, campaign_id, day)
+);
+`,
+  },
+  {
+    version: 13,
+    name: 'workspace_voice',
+    // Notes on how a workspace's content should sound (a client's voice), used when writing reels, scripts and captions for it.
+    sql: `ALTER TABLE workspaces ADD COLUMN voice text NOT NULL DEFAULT '';`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {
