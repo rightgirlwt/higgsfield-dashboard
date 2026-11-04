@@ -558,6 +558,28 @@ CREATE TABLE ad_days (
     // Notes on how a workspace's content should sound (a client's voice), used when writing reels, scripts and captions for it.
     sql: `ALTER TABLE workspaces ADD COLUMN voice text NOT NULL DEFAULT '';`,
   },
+  {
+    version: 14,
+    name: 'metrics_growth',
+    // What viewers say (comments as text), which episode of a project a post is, and numbers about an account as a whole
+    // (who its reach came from).
+    sql: `
+CREATE TABLE ig_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id uuid NOT NULL REFERENCES ig_posts(id) ON DELETE CASCADE,
+  comment_id text NOT NULL,
+  username text NOT NULL DEFAULT '',
+  body text NOT NULL DEFAULT '',
+  likes integer NOT NULL DEFAULT 0,
+  posted_at timestamptz,
+  UNIQUE (post_id, comment_id)
+);
+CREATE INDEX ig_comments_idx ON ig_comments(post_id, posted_at DESC);
+ALTER TABLE ig_posts ADD COLUMN project_id uuid REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE ig_posts ADD COLUMN episode integer;
+ALTER TABLE ig_accounts ADD COLUMN insights jsonb NOT NULL DEFAULT '{}'::jsonb;
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number> {

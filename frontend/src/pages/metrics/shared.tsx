@@ -8,7 +8,7 @@ import { useToast } from '../../state/Toast';
 
 export const tooltipStyle = { background: cssColor('slate-900'), border: `1px solid ${cssColor('slate-700')}`, borderRadius: 12, color: cssColor('slate-100') } as const;
 export const AXIS = cssColor('slate-400');
-export const SORTS: [string, string][] = [['recent', 'Newest'], ['reach', 'Reach'], ['views', 'Views'], ['engagement', 'Engagement'], ['saved', 'Saves'], ['shares', 'Shares'], ['comments', 'Comments'], ['likes', 'Likes']];
+export const SORTS: [string, string][] = [['recent', 'Newest'], ['reach', 'Reach'], ['views', 'Views'], ['engagement', 'Engagement'], ['saved', 'Saves'], ['shares', 'Shares and sends'], ['follows', 'Follows gained'], ['comments', 'Comments'], ['likes', 'Likes']];
 export const dayLabel = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 export const n = (v: number | null | undefined) => (v == null ? '–' : num(v));
 export const pct = (v: number | null | undefined) => (v == null ? '–' : `${v}%`);

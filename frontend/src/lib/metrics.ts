@@ -25,10 +25,21 @@ export interface IgPost {
   postedAt: string | null;
   metrics: PostMetrics;
   engagement: number | null;
+  /** The episode of a project this post is, with what the episode cost to make. */
+  link: { projectId: string; projectName: string; episode: number; spendUsd: number } | null;
+}
+
+export interface IgComment {
+  id: string;
+  username: string;
+  text: string;
+  likes: number;
+  postedAt: string | null;
 }
 
 export interface IgPostDetail extends IgPost {
   snapshots: { takenAt: string; metrics: PostMetrics }[];
+  comments: IgComment[];
 }
 
 export interface Overview {
@@ -38,6 +49,10 @@ export interface Overview {
   followerSince: string | null;
   last30: { posts: number; averageReach: number | null; averageEngagement: number | null; totalSaves: number; totalShares: number };
   best: IgPost | null;
+  /** Where the account's reach came from over the last `days` days. */
+  reachSplit: { of: 'views' | 'reach'; followers: number; nonFollowers: number; days: number } | null;
+  /** One mark per post, drawn on the follower chart. */
+  markers: { id: string; day: string; type: string; title: string; episode: number | null }[];
 }
 
 export interface SyncResult {
@@ -53,7 +68,7 @@ export const METRIC_LABELS: Record<string, string> = {
   likes: 'Likes',
   comments: 'Comments',
   saved: 'Saves',
-  shares: 'Shares',
+  shares: 'Shares and sends',
   reposts: 'Reposts',
   total_interactions: 'Interactions',
   follows: 'Follows from it',

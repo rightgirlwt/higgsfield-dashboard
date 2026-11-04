@@ -70,6 +70,11 @@ beforeAll(async () => {
       const page = after ? fake.media.slice(2) : fake.media.slice(0, Math.min(2, limit));
       return send(200, { data: page, paging: after || fake.media.length <= 2 ? {} : { cursors: { after: 'c2' }, next: 'https://graph.instagram.com/next-page-url-with-token' } });
     }
+    const split = (a: number, b: number) => ({ data: [{ name: u.searchParams.get('metric'), total_value: { value: a + b, breakdowns: [{ dimension_keys: ['follow_type'], results: [{ dimension_values: ['FOLLOWER'], value: a }, { dimension_values: ['NON_FOLLOWER'], value: b }] }] } }] });
+    // the split is offered for the account as a whole, on reach under "follow_type"; the other names are refused, the way Instagram does
+    if (u.pathname === '/me/insights' && u.searchParams.get('breakdown')) return u.searchParams.get('breakdown') === 'follow_type' && u.searchParams.get('metric') === 'reach' ? send(200, split(300, 700)) : send(400, { error: { message: '(#100) unsupported breakdown', code: 100 } });
+    const cm = /^\/(m\d)\/comments$/.exec(u.pathname);
+    if (cm) return send(200, { data: cm[1] === 'm1' ? [{ id: 'c1', text: 'who is the guy?', username: 'viewer_one', timestamp: ago(1), like_count: 4 }, { id: 'c2', text: 'ep 4?', username: 'viewer_two', timestamp: ago(2), like_count: 1 }] : [] });
     if (u.pathname === '/me/insights') {
       const end = (d: number) => new Date(Date.now() - d * DAY + 12 * 3_600_000).toISOString();
       return send(200, { data: [{ name: 'reach', period: 'day', values: [{ value: 700, end_time: end(2) }, { value: 900, end_time: end(1) }] }] });
@@ -204,6 +209,56 @@ describe('Metrics end to end, against a fake Instagram', () => {
     expect(o.last30.averageReach).toBe(3650); // (6500 + 800) / 2
     expect(o.last30.totalSaves).toBe(65);
     expect(o.best?.caption).toBe('Reel one');
+  });
+
+  it('says how much of the account\'s audience does not follow it, trying the views and reach names until one is offered', async () => {
+    const o = await json<{ reachSplit: { of: string; followers: number; nonFollowers: number; days: number } | null }>(await call(member, 'GET', `/metrics/accounts/${accountId}/overview`));
+    expect(o.reachSplit).toEqual({ of: 'reach', followers: 300, nonFollowers: 700, days: 28 }); // views was refused, reach was not
+  });
+
+  it('keeps what viewers wrote under the newest posts', async () => {
+    const posts = await json<{ id: string }[]>(await call(member, 'GET', `/metrics/accounts/${accountId}/posts`));
+    const d = await json<{ comments: { text: string; username: string; likes: number }[] }>(await call(member, 'GET', `/metrics/posts/${posts[0].id}`));
+    expect(d.comments.map((c) => c.text).sort()).toEqual(['ep 4?', 'who is the guy?']);
+    expect(d.comments.find((c) => c.username === 'viewer_one')?.likes).toBe(4);
+    // syncing again does not double them
+    await call(member, 'POST', `/metrics/accounts/${accountId}/sync`, {});
+    expect((await db.query('SELECT 1 FROM ig_comments')).rows).toHaveLength(2);
+  });
+
+  it('marks each post on the follower chart', async () => {
+    const o = await json<{ markers: { day: string; type: string; title: string; episode: number | null }[] }>(await call(member, 'GET', `/metrics/accounts/${accountId}/overview`));
+    expect(o.markers.map((m) => m.title).sort()).toEqual(['A photo', 'Old carousel', 'Reel one']); // the carousel is 80 days old, inside the 90 days drawn
+    expect(o.markers.every((m) => /^\d{4}-\d{2}-\d{2}$/.test(m.day))).toBe(true);
+  });
+
+  it('ties a post to an episode and shows what the episode cost to make next to what it earned', async () => {
+    const org = (await db.query<{ id: string }>('SELECT id FROM organizations LIMIT 1')).rows[0].id;
+    const pr = await json<{ id: string }>(await call(admin, 'POST', '/projects', { name: "Nya's Story", type: 'micro_drama' }));
+    const shot = async (group: string, usd: number[]) => {
+      const it = (await db.query<{ id: string }>(`INSERT INTO project_items (org_id, project_id, kind, group_name, position, title) VALUES ($1,$2,'shot',$3,0,'shot') RETURNING id`, [org, pr.id, group])).rows[0].id;
+      for (const c of usd) await db.query(`INSERT INTO job_runs (org_id, kind, ref_name, status, input, cost_usd) VALUES ($1,'generation','shot','completed',$2::jsonb,$3)`, [org, JSON.stringify({ projectId: pr.id, itemId: it }), c]);
+    };
+    await shot('Ep 3 · Scene 1', [1.5, 2.25]);
+    await shot('Ep 3 · Scene 2', [4]);
+    await shot('Ep 4 · Scene 1', [9]);
+    const posts = await json<{ id: string }[]>(await call(member, 'GET', `/metrics/accounts/${accountId}/posts`));
+    const set = await call(member, 'PUT', `/metrics/posts/${posts[0].id}/episode`, { link: { projectId: pr.id, episode: 3 } });
+    expect(set.status).toBe(200);
+    expect((await json<{ link: unknown }>(set)).link).toEqual({ projectId: pr.id, projectName: "Nya's Story", episode: 3, spendUsd: 7.75 });
+    const listed = await json<{ link: { episode: number; spendUsd: number } | null }[]>(await call(member, 'GET', `/metrics/accounts/${accountId}/posts`));
+    expect(listed[0].link).toMatchObject({ episode: 3, spendUsd: 7.75 });
+    expect(listed[1].link).toBeNull();
+    // the link survives a refresh, and shows on the chart's marker
+    await call(member, 'POST', `/metrics/accounts/${accountId}/sync`, {});
+    const o = await json<{ markers: { title: string; episode: number | null }[] }>(await call(member, 'GET', `/metrics/accounts/${accountId}/overview`));
+    expect(o.markers.find((m) => m.title === 'Reel one')?.episode).toBe(3);
+    // bad links are refused, and a link can be cleared
+    expect((await call(member, 'PUT', `/metrics/posts/${posts[0].id}/episode`, { link: { projectId: '00000000-0000-4000-8000-000000000000', episode: 3 } })).status).toBe(404);
+    expect((await call(member, 'PUT', `/metrics/posts/${posts[0].id}/episode`, { link: { projectId: pr.id, episode: 0 } })).status).toBe(400);
+    expect((await call(member, 'PUT', `/metrics/posts/00000000-0000-4000-8000-000000000000/episode`, { link: null })).status).toBe(404);
+    const cleared = await call(member, 'PUT', `/metrics/posts/${posts[0].id}/episode`, { link: null });
+    expect((await json<{ link: unknown }>(cleared)).link).toBeNull();
   });
 
   it('asks each insight for a post once it knows which ones are refused', async () => {

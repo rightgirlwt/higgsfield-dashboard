@@ -3,6 +3,7 @@ import { getDb } from '../ctx';
 import { decryptSecret, encryptSecret, last4 } from '../lib/crypto';
 import { badRequest, HttpError, notFound } from '../lib/errors';
 import { logger } from '../logger';
+import { linksFor, type PostLink } from './metricsEpisodes';
 import { inWorkspace, type Workspace } from './workspaces';
 
 /**
@@ -15,6 +16,8 @@ const REEL_METRICS = ['reach', 'views', 'likes', 'comments', 'saved', 'shares', 
 const FEED_METRICS = ['reach', 'views', 'likes', 'comments', 'saved', 'shares', 'reposts', 'total_interactions', 'follows', 'profile_visits'];
 const DEFAULT_POSTS = 40;
 const MAX_POSTS = 100;
+/** Comments are read under this many of the newest posts on each refresh. */
+const COMMENT_POSTS = 15;
 
 // ---- talking to Instagram -------------------------------------------------------------------------------------
 
@@ -143,6 +146,58 @@ async function insightsFor(c: Conn, mediaId: string, wanted: string[], refused: 
   return out;
 }
 
+interface SplitRow {
+  name?: string;
+  total_value?: { value?: number; breakdowns?: { results?: { dimension_values?: string[]; value?: number }[] }[] };
+}
+
+/** Which of the two groups a breakdown row belongs to (Instagram has called the split "follow_type" and "follower_type"). */
+const isNonFollower = (dim: string | undefined) => /non/i.test(dim ?? '');
+
+/** People who follow the account and people who do not, from a breakdown answer. Null when the answer has no such split. */
+export function splitFrom(rows: SplitRow[] | undefined): { followers: number; nonFollowers: number } | null {
+  const results = rows?.[0]?.total_value?.breakdowns?.[0]?.results;
+  if (!results?.length) return null;
+  let followers = 0;
+  let nonFollowers = 0;
+  for (const r of results) {
+    if (typeof r.value !== 'number') continue;
+    if (isNonFollower(r.dimension_values?.[0])) nonFollowers += r.value;
+    else followers += r.value;
+  }
+  return { followers, nonFollowers };
+}
+
+/** The split is offered for the whole account, not per post. It has been offered on views and on reach, under two names. */
+const SPLITS: [metric: string, breakdown: string][] = [['views', 'follow_type'], ['reach', 'follow_type'], ['views', 'follower_type'], ['reach', 'follower_type']];
+
+/** Where the account's audience came from over the last 28 days: followers or not. Null when Instagram does not offer it. */
+async function reachSplitFor(c: Conn): Promise<{ of: 'views' | 'reach'; followers: number; nonFollowers: number; days: number } | null> {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [metric, breakdown] of SPLITS) {
+    try {
+      const s = splitFrom((await graph<{ data?: SplitRow[] }>(c, `/${c.id}/insights`, { metric, period: 'day', metric_type: 'total_value', breakdown, since: now - 28 * 86_400, until: now })).data);
+      if (s && s.followers + s.nonFollowers > 0) return { of: metric as 'views' | 'reach', ...s, days: 28 };
+    } catch (e) {
+      if (tokenProblem(e) || rateLimited(e) || !(e instanceof GraphError)) throw e;
+    }
+  }
+  return null;
+}
+
+interface CommentItem {
+  id: string;
+  text?: string;
+  username?: string;
+  timestamp?: string;
+  like_count?: number;
+}
+
+/** What people wrote under a post, newest first. */
+async function commentsFor(c: Conn, mediaId: string): Promise<CommentItem[]> {
+  return (await graph<{ data?: CommentItem[] }>(c, `/${mediaId}/comments`, { fields: 'id,text,username,timestamp,like_count', limit: 50 })).data ?? [];
+}
+
 // ---- accounts -------------------------------------------------------------------------------------------------
 
 interface AccountRow {
@@ -163,6 +218,7 @@ interface AccountRow {
   last_synced_at: string | Date | null;
   last_error: string;
   created_at: string | Date;
+  insights: { reachSplit?: { of: 'views' | 'reach'; followers: number; nonFollowers: number; days: number } };
 }
 
 export const iso = (d: string | Date | null) => (d ? new Date(d).toISOString() : null);
@@ -339,6 +395,7 @@ export async function syncAccount(orgId: string, id: string, o: { posts?: number
 
     const media = await mediaList(conn(), Math.min(MAX_POSTS, Math.max(5, o.posts ?? DEFAULT_POSTS)));
     const refused = { reel: new Set<string>(), feed: new Set<string>() };
+    const postIds = new Map<string, string>();
     let updated = 0;
     await pool(media, 4, async (m) => {
       const reel = m.media_product_type === 'REELS';
@@ -357,8 +414,32 @@ export async function syncAccount(orgId: string, id: string, o: { posts?: number
       if (!last.rows[0] || !sameMetrics(last.rows[0].metrics, metrics)) {
         await db.query('INSERT INTO ig_snapshots (post_id, metrics) VALUES ($1,$2::jsonb)', [rows[0].id, JSON.stringify(metrics)]);
       }
+      postIds.set(m.id, rows[0].id);
       updated++;
     });
+
+    // what viewers wrote under the newest posts (best effort: it needs the comments permission)
+    try {
+      for (const m of media.slice(0, COMMENT_POSTS)) {
+        const postId = postIds.get(m.id);
+        if (!postId) continue;
+        for (const c of await commentsFor(conn(), m.id)) {
+          if (!c.id || !c.text) continue;
+          await db.query(
+            `INSERT INTO ig_comments (post_id, comment_id, username, body, likes, posted_at) VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (post_id, comment_id) DO UPDATE SET body=EXCLUDED.body, likes=EXCLUDED.likes, username=EXCLUDED.username`,
+            [postId, c.id, (c.username ?? '').slice(0, 100), c.text.slice(0, 2200), c.like_count ?? 0, c.timestamp ? new Date(c.timestamp) : null],
+          );
+        }
+      }
+    } catch (e) {
+      if (tokenProblem(e) || rateLimited(e)) throw e;
+      logger.info('instagram: comments not available', { account: id, reason: (e as Error).message.slice(0, 120) });
+    }
+
+    // who the account's audience came from over the last 28 days (best effort)
+    const split = await reachSplitFor(conn());
+    if (split) await db.query(`UPDATE ig_accounts SET insights = insights || $3::jsonb WHERE id=$1 AND org_id=$2`, [id, orgId, JSON.stringify({ reachSplit: split })]);
 
     // reach for the account, a day at a time (best effort: it needs the insights permission and enough followers)
     try {
@@ -396,6 +477,8 @@ interface PostRow {
   thumb_url: string;
   posted_at: string | Date | null;
   metrics: PostMetrics;
+  project_id: string | null;
+  episode: number | null;
 }
 
 /** Likes, comments, saves and shares as a share of the people reached. Null until reach is known. */
@@ -406,7 +489,8 @@ export function engagementRate(m: PostMetrics): number | null {
   return Math.round((sum / reach) * 10_000) / 100;
 }
 
-const presentPost = (p: PostRow) => ({
+const presentPost = (p: PostRow, link: PostLink | null = null) => ({
+  link,
   id: p.id,
   mediaId: p.media_id,
   permalink: p.permalink,
@@ -426,6 +510,7 @@ const SORTS: Record<string, (p: ReturnType<typeof presentPost>) => number> = {
   comments: (p) => p.metrics.comments ?? -1,
   saved: (p) => p.metrics.saved ?? -1,
   shares: (p) => p.metrics.shares ?? -1,
+  follows: (p) => p.metrics.follows ?? -1,
   engagement: (p) => p.engagement ?? -1,
 };
 export const SORT_KEYS = Object.keys(SORTS);
@@ -433,7 +518,8 @@ export const SORT_KEYS = Object.keys(SORTS);
 export async function listPosts(orgId: string, id: string, o: { sort?: string; type?: string }) {
   await loadAccount(orgId, id);
   const { rows } = await getDb().query<PostRow>('SELECT * FROM ig_posts WHERE account_id=$1 ORDER BY posted_at DESC NULLS LAST LIMIT 200', [id]);
-  let posts = rows.map(presentPost);
+  const links = await linksFor(orgId, rows);
+  let posts = rows.map((r) => presentPost(r, links.get(r.id) ?? null));
   if (o.type) posts = posts.filter((p) => p.type === o.type);
   const by = SORTS[o.sort ?? 'recent'] ?? SORTS.recent;
   return posts.sort((a, b) => by(b) - by(a));
@@ -443,7 +529,14 @@ export async function getPost(orgId: string, postId: string) {
   const { rows } = await getDb().query<PostRow & { org_id: string }>('SELECT p.*, a.org_id FROM ig_posts p JOIN ig_accounts a ON a.id=p.account_id WHERE p.id=$1', [postId]);
   if (!rows[0] || rows[0].org_id !== orgId) throw notFound('Post not found');
   const snaps = await getDb().query<{ taken_at: string | Date; metrics: PostMetrics }>('SELECT taken_at, metrics FROM ig_snapshots WHERE post_id=$1 ORDER BY taken_at', [postId]);
-  return { ...presentPost(rows[0]), snapshots: snaps.rows.map((s) => ({ takenAt: iso(s.taken_at)!, metrics: s.metrics })) };
+  const comments = await getDb().query<{ comment_id: string; username: string; body: string; likes: number; posted_at: string | Date | null }>(
+    'SELECT comment_id, username, body, likes, posted_at FROM ig_comments WHERE post_id=$1 ORDER BY posted_at DESC NULLS LAST LIMIT 100', [postId]);
+  const link = (await linksFor(orgId, [rows[0]])).get(postId) ?? null;
+  return {
+    ...presentPost(rows[0], link),
+    snapshots: snaps.rows.map((s) => ({ takenAt: iso(s.taken_at)!, metrics: s.metrics })),
+    comments: comments.rows.map((c) => ({ id: c.comment_id, username: c.username, text: c.body, likes: c.likes, postedAt: iso(c.posted_at) })),
+  };
 }
 
 const avg = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
@@ -467,5 +560,10 @@ export async function overview(orgId: string, id: string) {
     followerSince: followed.length >= 2 ? followed[0].day : null,
     last30: { posts: recent.length, averageReach: avg(withReach.map((p) => p.metrics.reach as number)), averageEngagement: avg(rates), totalSaves: recent.reduce((s, p) => s + (p.metrics.saved ?? 0), 0), totalShares: recent.reduce((s, p) => s + (p.metrics.shares ?? 0), 0) },
     best,
+    reachSplit: a.insights?.reachSplit ?? null,
+    // each post of the last 90 days as a mark on the follower chart, so a jump lines up with what was posted that day
+    markers: posts
+      .filter((p) => p.postedAt && Date.parse(p.postedAt) >= Date.now() - 90 * 86_400_000)
+      .map((p) => ({ id: p.id, day: p.postedAt!.slice(0, 10), type: p.type, title: p.caption.split('\n')[0].slice(0, 60), episode: p.link?.episode ?? null })),
   };
 }

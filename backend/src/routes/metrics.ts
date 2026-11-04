@@ -5,6 +5,7 @@ import { wrap } from '../lib/errors';
 import { adOverview, connectAdAccounts, listAdAccounts, removeAdAccount, syncAdAccount } from '../services/ads';
 import { connectPages, FB_SORT_KEYS, listFbPosts, listPages, pageOverview, removePage, syncPage } from '../services/facebook';
 import { connectAccount, getPost, listAccounts, listPosts, overview, removeAccount, SORT_KEYS, syncAccount } from '../services/metrics';
+import { linkPost } from '../services/metricsEpisodes';
 import { allChannels } from '../services/metricsSummary';
 
 export const metrics = Router();
@@ -75,6 +76,16 @@ metrics.get(
 metrics.get(
   '/posts/:id',
   wrap(async (req, res) => {
+    res.json(await getPost(req.user!.orgId, id(req)));
+  }),
+);
+
+/** Says which episode of a project a post is (or clears it), so the cost of making it can sit beside what it earned. */
+metrics.put(
+  '/posts/:id/episode',
+  wrap(async (req, res) => {
+    const b = z.object({ link: z.object({ projectId: z.string().uuid(), episode: z.number().int().min(1).max(9999) }).nullable() }).parse(req.body ?? {});
+    await linkPost(req.user!.orgId, id(req), b.link);
     res.json(await getPost(req.user!.orgId, id(req)));
   }),
 );
