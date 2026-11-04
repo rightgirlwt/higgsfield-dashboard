@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, Layers, MessageSquare, Plus, Workflow as WorkflowIcon } from 'lucide-react';
+import { ArrowLeft, Download, Layers, MessageSquare, MoveRight, Plus, Workflow as WorkflowIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCan } from '../auth/context';
@@ -8,10 +8,12 @@ import { BriefPanel } from '../components/project/BriefPanel';
 import { ChatPanel } from '../components/project/ChatPanel';
 import { GenerateDialog } from '../components/project/GenerateDialog';
 import { ItemEditor } from '../components/project/ItemEditor';
+import { MoveDialog } from '../components/project/MoveDialog';
 import { StartHere } from '../components/project/StartHere';
 import { VariantDialog } from '../components/project/VariantDialog';
 import { Badge, Button, Card, cx, EmptyState, ErrorState, Modal, PageHeader, ProgressBar, Skeleton } from '../components/ui';
 import { api, errorMessage } from '../lib/api';
+import { composeGroup, episodesOf, parseGroup, resolveEpisode, type EpisodeChoice } from '../lib/episodes';
 import { timeAgo, usd } from '../lib/format';
 import { useApi, useDocumentTitle } from '../lib/hooks';
 import type { BoardItem, ChatChanged, ProjectSnapshot, StudioCatalog } from '../lib/types';
@@ -25,6 +27,8 @@ export default function Project() {
   const toast = useToast();
   const navigate = useNavigate();
   const canWrite = useCan('user');
+  const isAdmin = useCan('admin');
+  const [moveOpen, setMoveOpen] = useState(false);
   const { runTick } = useRealtime();
   const snapApi = useApi<ProjectSnapshot>(`/projects/${id}`);
   const catalogApi = useApi<StudioCatalog>('/studio/models');
@@ -38,6 +42,8 @@ export default function Project() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [generating, setGenerating] = useState<BoardItem[] | null>(null);
   const [variants, setVariants] = useState(false);
+  // Micro drama: which episode the board is showing (null until picked, then the newest)
+  const [episode, setEpisode] = useState<EpisodeChoice | null>(null);
 
   const reload = snapApi.reload;
   // A generation finishing (or any run changing) updates card statuses and takes.
@@ -71,6 +77,19 @@ export default function Project() {
   const groups = useMemo(() => [...new Set(snap?.items.map((i) => i.group).filter(Boolean) ?? [])], [snap]);
   const editing = snap?.items.find((i) => i.id === editingId) ?? null;
 
+  /** Where "Add shot" puts a new one: the end of the open episode for a micro drama, else after the last group. */
+  const defaultGroup = () => {
+    if (!snap) return '';
+    if (snap.type.id === 'micro_drama') {
+      const cur = resolveEpisode(episode, episodesOf(snap.items));
+      if (typeof cur === 'number') {
+        const inEp = snap.items.filter((i) => parseGroup(i.group).episode === cur);
+        return inEp[inEp.length - 1]?.group ?? composeGroup(cur, 'Scene 1');
+      }
+    }
+    return groups[groups.length - 1] ?? '';
+  };
+
   const addItem = async (group: string) => {
     if (!snap) return;
     try {
@@ -80,6 +99,15 @@ export default function Project() {
     } catch (e) {
       toast.error(errorMessage(e));
     }
+  };
+
+  /** A new episode is the next number up, starting with one empty shot in Scene 1 to open. */
+  const newEpisode = async () => {
+    if (!snap) return;
+    const nums = episodesOf(snap.items).map((e) => e.episode).filter((e): e is number => e !== null);
+    const next = (nums.length ? Math.max(...nums) : 0) + 1;
+    await addItem(composeGroup(next, 'Scene 1'));
+    setEpisode(next);
   };
 
   const [outbox, setOutbox] = useState<{ id: number; text: string } | null>(null);
@@ -151,8 +179,9 @@ export default function Project() {
         actions={
           <>
             <Button onClick={() => setExportOpen(true)}><Download className="h-4 w-4" aria-hidden /> Export</Button>
+            {isAdmin && <Button onClick={() => setMoveOpen(true)}><MoveRight className="h-4 w-4" aria-hidden /> Move to workspace</Button>}
             {type.id === 'ad_campaign' && canWrite && <Button onClick={() => setVariants(true)}><Layers className="h-4 w-4" aria-hidden /> Variant matrix</Button>}
-            {canWrite && <Button variant="primary" onClick={() => void addItem(groups[groups.length - 1] ?? '')}><Plus className="h-4 w-4" aria-hidden /> Add {type.itemLabel.toLowerCase()}</Button>}
+            {canWrite && <Button variant="primary" onClick={() => void addItem(defaultGroup())}><Plus className="h-4 w-4" aria-hidden /> Add {type.itemLabel.toLowerCase()}</Button>}
           </>
         }
       />
@@ -190,7 +219,7 @@ export default function Project() {
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_25rem]">
         <div className={cx('min-w-0', tab === 'chat' && 'hidden lg:block')}>
           {tab === 'board' && (
-            <Board snap={snap} catalog={catalog} selected={selected} onSelect={select} onOpen={(i) => setEditingId(i.id)} onGenerate={setGenerating} onAdd={(g) => void addItem(g)} onAsk={() => askDirector(type.id === 'micro_drama' ? 'Draft the shot list for episode 1 from my story bible, using inexpensive models, and tell me the cost.' : 'Draft three ad concepts with one ad unit each from my brand kit, using inexpensive models, and tell me the cost.')} canWrite={canWrite} />
+            <Board snap={snap} catalog={catalog} selected={selected} onSelect={select} onOpen={(i) => setEditingId(i.id)} onGenerate={setGenerating} onAdd={(g) => void addItem(g)} episode={episode} onEpisode={setEpisode} onNewEpisode={() => void newEpisode()} onAsk={() => askDirector(type.id === 'micro_drama' ? 'Draft the shot list for episode 1 from my story bible, using inexpensive models, and tell me the cost.' : 'Draft three ad concepts with one ad unit each from my brand kit, using inexpensive models, and tell me the cost.')} canWrite={canWrite} />
           )}
           {tab === 'brief' && <BriefPanel snap={snap} onSaved={reload} onAsk={askDirector} />}
           {tab === 'assets' && <AssetsPanel projectId={project.id} assets={snap.assets} connected={!!catalog?.connected} onChanged={reload} />}
@@ -240,6 +269,7 @@ export default function Project() {
 
       <ItemEditor projectId={project.id} item={editing} items={snap.items} assets={snap.assets} catalog={catalog} type={type} groups={groups} onClose={closeEditor} onSaved={reload} onGenerate={(i) => { setEditingId(null); setGenerating([i]); }} />
       <GenerateDialog projectId={project.id} items={generating} pricesAsOf={catalog?.pricesAsOf} onClose={closeGenerate} onStarted={() => { setGenerating(null); setSelected(new Set()); reload(); }} />
+      <MoveDialog open={moveOpen} projectId={project.id} projectName={project.name} onClose={() => setMoveOpen(false)} onMoved={() => navigate('/projects')} />
       <Modal open={exportOpen} onClose={closeExport} title="Export">
         <div className="space-y-3">
           <p className="text-sm text-slate-400">Take the work into your editor or share it. Clips are your <strong>approved</strong> takes ({approved} of {snap.items.length}), numbered in board order.</p>

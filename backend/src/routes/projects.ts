@@ -9,7 +9,8 @@ import {
   addItems, ASSET_KINDS, cleanBrief, emptyBrief, estimateItems, expandVariants, itemCreate, itemUpdate, loadItem, loadItems, loadProject, loadTakes,
   mapAsset, mapItem, mapProject, projectSpend, startGeneration, touchProject, updateItem,
 } from '../services/projects';
-import { inWorkspace } from '../services/workspaces';
+import { requireRole } from '../auth';
+import { inWorkspace, listWorkspaces } from '../services/workspaces';
 import { likePattern, uuidParam } from './util';
 
 export const projects = Router();
@@ -114,6 +115,26 @@ projects.put(
   }),
 );
 
+/**
+ * Moves a project to another workspace, with the media it generated (the library items tagged with this project), so nothing is left
+ * behind in the old workspace. Nothing is deleted or re-run; spending stays with the project. Admin only.
+ */
+projects.post(
+  '/:id/move',
+  requireRole('admin'),
+  wrap(async (req, res) => {
+    const id = uuidParam(req);
+    const org = req.user!.orgId;
+    const { workspaceId } = z.object({ workspaceId: z.string().uuid() }).parse(req.body ?? {});
+    const target = (await listWorkspaces(org)).find((w) => w.id === workspaceId);
+    if (!target) throw notFound('Workspace not found');
+    await loadProject(org, id);
+    // updated_at is left alone on purpose: moving it is not editing it
+    const { rows } = await getDb().query('UPDATE projects SET workspace_id=$3 WHERE id=$1 AND org_id=$2 RETURNING *', [id, org, workspaceId]);
+    const media = await getDb().query(`UPDATE media_assets SET workspace_id=$3 WHERE org_id=$1 AND metadata->>'projectId'=$2::text`, [org, id, workspaceId]);
+    res.json({ project: mapProject(rows[0]), movedMedia: media.rowCount ?? 0, workspace: { id: target.id, name: target.name } });
+  }),
+);
 projects.delete(
   '/:id',
   wrap(async (req, res) => {

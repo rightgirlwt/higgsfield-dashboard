@@ -6,6 +6,7 @@ import { livePrice, mapLimit } from './livePrice';
 import { getPrices, prepareGeneration, runStudioGeneration, type GenerateParams } from './studio';
 import { billedSeconds, getStudioModel, LIST_PRICES, outputsPerRequest, unitPrice, type MediaRole } from './studioCatalog';
 import { PROJECT_TYPES, type ProjectType } from './projectTypes';
+import { signMediaLink, signMediaThumbLink } from './sourceLinks';
 
 export const ROLES = ['start', 'end', 'reference', 'video', 'audio'] as const;
 export const ITEM_STATUSES = ['draft', 'ready', 'generating', 'review', 'approved', 'rejected'] as const;
@@ -99,13 +100,13 @@ export interface Take {
 /** Everything generated for a project's items, newest first, grouped by item id. */
 export async function loadTakes(orgId: string, projectId: string): Promise<Map<string, Take[]>> {
   const { rows } = await getDb().query<any>(
-    `SELECT id, type, url, thumb_url, title, created_at, metadata->>'itemId' AS item_id
+    `SELECT id, type, url, thumb_url, title, created_at, metadata->>'itemId' AS item_id, metadata->>'localKey' AS local_key
      FROM media_assets WHERE org_id=$1 AND metadata->>'projectId'=$2 AND metadata->>'itemId' IS NOT NULL ORDER BY created_at DESC, id DESC`,
     [orgId, projectId],
   );
   const out = new Map<string, Take[]>();
   for (const r of rows) {
-    const t: Take = { id: r.id, itemId: r.item_id, type: r.type, url: r.url, thumbUrl: r.thumb_url, title: r.title, createdAt: iso(r.created_at)! };
+    const t: Take = { id: r.id, itemId: r.item_id, type: r.type, url: r.local_key ? signMediaLink(r.id) : r.url, thumbUrl: r.local_key ? signMediaThumbLink(r.id) : r.thumb_url, title: r.title, createdAt: iso(r.created_at)! };
     (out.get(t.itemId) ?? out.set(t.itemId, []).get(t.itemId)!).push(t);
   }
   return out;

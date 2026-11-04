@@ -1,8 +1,9 @@
 import { AlertTriangle, Check, Film, ImageIcon, Loader2, Plus, Wand2 } from 'lucide-react';
 import { useMemo } from 'react';
+import { episodesOf, inEpisode, parseGroup, resolveEpisode, type EpisodeChoice } from '../../lib/episodes';
 import { usd } from '../../lib/format';
 import type { BoardItem, ItemStatus, ProjectSnapshot, StudioCatalog } from '../../lib/types';
-import { Badge, Button, cx, EmptyState, type Tone } from '../ui';
+import { Badge, Button, cx, EmptyState, Select, type Tone } from '../ui';
 
 export const STATUS: Record<ItemStatus, { label: string; tone: Tone }> = {
   draft: { label: 'Draft', tone: 'slate' },
@@ -37,7 +38,7 @@ function Thumb({ item, aspect, surface }: { item: BoardItem; aspect: string; sur
 }
 
 export function Board({
-  snap, catalog, selected, onSelect, onOpen, onGenerate, onAdd, onAsk, canWrite,
+  snap, catalog, selected, onSelect, onOpen, onGenerate, onAdd, onAsk, canWrite, episode, onEpisode, onNewEpisode,
 }: {
   snap: ProjectSnapshot;
   catalog: StudioCatalog | null;
@@ -48,13 +49,26 @@ export function Board({
   onAdd: (group: string) => void;
   onAsk: () => void;
   canWrite: boolean;
+  /** Micro dramas only: which episode is open (null until one is picked, then the newest). */
+  episode: EpisodeChoice | null;
+  onEpisode: (e: EpisodeChoice) => void;
+  onNewEpisode: () => void;
 }) {
   const { items, type, project } = snap;
+  const micro = type.id === 'micro_drama';
+  const episodes = useMemo(() => episodesOf(items), [items]);
+  const current = resolveEpisode(episode, episodes);
+  const shownEpisodes = current === 'all' ? episodes : episodes.filter((e) => (e.episode ?? 'none') === current);
+  const shownShots = shownEpisodes.reduce((s, e) => s + e.shots, 0);
+  const episodeSummary = `${shownShots} shot${shownShots === 1 ? '' : 's'} · ${shownEpisodes.reduce((s, e) => s + e.approved, 0)} approved`;
+  // A micro drama shows one episode at a time (or all, newest episode first); scenes stay in story order inside an episode.
   const groups = useMemo(() => {
     const m = new Map<string, BoardItem[]>();
-    for (const i of items) (m.get(i.group) ?? m.set(i.group, []).get(i.group)!).push(i);
-    return [...m.entries()];
-  }, [items]);
+    for (const i of micro ? items.filter((x) => inEpisode(x.group, current)) : items) (m.get(i.group) ?? m.set(i.group, []).get(i.group)!).push(i);
+    const list = [...m.entries()];
+    if (micro && current === 'all') list.sort(([a], [b]) => (parseGroup(b).episode ?? -1) - (parseGroup(a).episode ?? -1));
+    return list;
+  }, [items, micro, current]);
   const ready = items.filter((i) => i.status === 'ready');
   const picked = items.filter((i) => selected.has(i.id));
   const label = type.itemLabel.toLowerCase();
@@ -81,6 +95,30 @@ export function Board({
         </div>
       )}
 
+      {micro && (
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="episode-pick" className="sr-only">Episode</label>
+          <Select
+            id="episode-pick"
+            className="w-auto min-w-60 text-base font-semibold"
+            value={current === 'all' ? 'all' : String(current)}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === '__new') onNewEpisode();
+              else onEpisode(v === 'all' ? 'all' : v === 'none' ? 'none' : Number(v));
+            }}
+          >
+            {episodes.map((e) => (
+              <option key={e.episode ?? 'none'} value={e.episode === null ? 'none' : String(e.episode)}>
+                {e.episode === null ? 'No episode' : `Episode ${e.episode}`}
+              </option>
+            ))}
+            {episodes.length > 1 && <option value="all">All episodes</option>}
+            {canWrite && <option value="__new">+ New episode</option>}
+          </Select>
+          <span className="text-xs text-slate-500">{episodeSummary}</span>
+        </div>
+      )}
       {groups.map(([group, list]) => {
         const selectable = list.filter((i) => i.status !== 'generating');
         const allOn = selectable.length > 0 && selectable.every((i) => selected.has(i.id));
@@ -89,7 +127,7 @@ export function Board({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-3">
                 {canWrite && <input type="checkbox" className="h-4 w-4 accent-cyan-500" aria-label={`Select all in ${group || 'ungrouped'}`} checked={allOn} onChange={(e) => onSelect(selectable.map((i) => i.id), e.target.checked)} />}
-                <h3 className="text-base font-semibold">{group || `No ${type.groupLabel.toLowerCase()}`}</h3>
+                <h3 className="text-base font-semibold">{micro && current !== 'all' ? (parseGroup(group).scene || `No ${type.groupLabel.toLowerCase()}`) : (group || `No ${type.groupLabel.toLowerCase()}`)}</h3>
                 <span className="text-xs text-slate-500">{list.length} {label}{list.length > 1 ? 's' : ''} · {list.filter((i) => i.status === 'approved').length} approved · about {usd(sum(list))}</span>
               </div>
               {canWrite && <Button size="sm" variant="ghost" onClick={() => onAdd(group)}><Plus className="h-3.5 w-3.5" aria-hidden /> Add {label}</Button>}

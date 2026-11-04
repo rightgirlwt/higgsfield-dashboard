@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDb } from '../ctx';
 import { badRequest, notFound, wrap } from '../lib/errors';
 import { placeholderImage } from '../lib/placeholder';
+import { playableThumb, playableUrl } from '../services/mediaStore';
 import { createUploadUrl } from '../services/storage';
 import { inWorkspace } from '../services/workspaces';
 import { isUuid, likePattern, toCsv, uuidParam } from './util';
@@ -10,7 +11,7 @@ import { isUuid, likePattern, toCsv, uuidParam } from './util';
 export const media = Router();
 
 const mapMedia = (m: any) => ({
-  id: m.id, type: m.type, title: m.title, url: m.url, thumbUrl: m.thumb_url, tags: m.tags, metadata: m.metadata,
+  id: m.id, type: m.type, title: m.title, url: playableUrl(m), thumbUrl: playableThumb(m), tags: m.tags, metadata: m.metadata,
   workflowId: m.workflow_id, workflowName: m.workflow_name ?? null, runId: m.run_id, createdAt: new Date(m.created_at).toISOString(),
 });
 

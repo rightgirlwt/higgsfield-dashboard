@@ -2,9 +2,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config';
+import { getDb } from '../ctx';
 import { badRequest } from '../lib/errors';
 import { logger } from '../logger';
 import { uploadFile, UPLOAD_TYPES, type HfConfig } from './higgsfield';
+import { run } from './exec';
+import { signMediaLink, signMediaThumbLink } from './sourceLinks';
 
 /**
  * Local copies of everything hosted on Higgsfield storage.
@@ -45,6 +48,52 @@ export async function saveLocalCopyFromUrl(url: string): Promise<void> {
     logger.warn('could not download a result to keep a copy', { err: String(e) });
   }
 }
+
+/** A media item may say its file is one of the local copies (metadata.localKey, a 64-character name). Returns where it is. */
+export async function localFileFor(mediaId: string): Promise<{ file: string; contentType: string } | null> {
+  const { rows } = await getDb().query<{ key: string | null }>(`SELECT metadata->>'localKey' AS key FROM media_assets WHERE id=$1`, [mediaId]);
+  const key = rows[0]?.key;
+  if (!key || !/^[0-9a-f]{64}$/.test(key)) return null;
+  const file = path.join(config.filesDir, key);
+  try {
+    const [, type] = await Promise.all([fs.access(file), fs.readFile(`${file}.type`, 'utf8').catch(() => 'application/octet-stream')]);
+    return { file: path.resolve(file), contentType: type.trim() || 'application/octet-stream' };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A picture for a locally kept item: the file itself for a photo, or a frame from a video (made once with ffmpeg, then kept beside it
+ * as `<name>.thumb.jpg`). Null when the item has no local file or ffmpeg cannot read it.
+ */
+export async function localThumbFor(mediaId: string): Promise<{ file: string; contentType: string } | null> {
+  const f = await localFileFor(mediaId);
+  if (!f) return null;
+  if (f.contentType.startsWith('image/')) return f;
+  if (!f.contentType.startsWith('video/')) return null;
+  const cache = `${f.file}.thumb.jpg`;
+  try {
+    await fs.access(cache);
+  } catch {
+    const tmp = `${cache}.${process.pid}.tmp.jpg`;
+    try {
+      await run('ffmpeg', ['-v', 'error', '-y', '-ss', '1', '-i', f.file, '-frames:v', '1', '-vf', 'scale=360:640:force_original_aspect_ratio=decrease', '-q:v', '5', tmp], { timeoutMs: 60_000 });
+      await fs.rename(tmp, cache);
+    } catch (e) {
+      await fs.rm(tmp, { force: true });
+      logger.warn('could not make a thumbnail for a local video', { id: mediaId, err: (e as Error).message });
+      return null;
+    }
+  }
+  return { file: path.resolve(cache), contentType: 'image/jpeg' };
+}
+
+/** The thumbnail address a page should use: a fresh signed link for a locally kept item, else the stored one. */
+export const playableThumb = (m: { id: string; thumb_url: string; metadata?: { localKey?: unknown } | null }) => (typeof m.metadata?.localKey === 'string' ? signMediaThumbLink(m.id) : m.thumb_url);
+
+/** The address a page should use for a media item: a fresh signed link for one kept on this computer, else its own link. */
+export const playableUrl = (m: { id: string; url: string; metadata?: { localKey?: unknown } | null }) => (typeof m.metadata?.localKey === 'string' ? signMediaLink(m.id) : m.url);
 
 export async function readLocalCopy(url: string): Promise<{ data: Buffer; contentType: string } | null> {
   try {

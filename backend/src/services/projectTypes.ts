@@ -52,7 +52,7 @@ export const PROJECT_TYPES: Record<ProjectType, ProjectTypeDef> = {
       'Review my shot list for continuity problems and cost.',
     ],
     guidance: [
-      'This is a MICRO DRAMA project: short vertical episodes. The board holds SHOTS grouped into SCENES (use the group field like "Ep 1 · Scene 2").',
+      'This is a MICRO DRAMA project: short vertical episodes. The board holds SHOTS grouped into SCENES (use the group field like "Ep 1 · Scene 2"). Always write the group in exactly that form, episode number first: the board splits it into an Episode and a Scene, and a shot with no episode ends up in a "No episode" pile.',
       'Each shot is one short clip (usually 3–8 seconds). Write each shot prompt as a complete, self-contained description: subject, action, setting, camera, lighting, mood. Always repeat the character descriptions and the visual style from the brief, because every generation starts cold.',
       'For continuity, prefer a two-step approach when it is worth the cost: an image shot (a keyframe) and then a video shot that uses it as the start frame (set meta.startFromItemId to the image item id). Use a Soul ID character (settings.custom_reference_id) on image shots when the project has one.',
       'Dialogue and captions belong in the notes field, not the prompt, unless the chosen video model generates audio.',

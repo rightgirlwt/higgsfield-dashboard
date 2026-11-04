@@ -20,7 +20,8 @@ import { studio } from './routes/studio';
 import { workflows } from './routes/workflows';
 import { edit } from './routes/edit';
 import { resultPath, sourcePath } from './services/effects';
-import { sourceLinkValid, studyLinkValid, vaultLinkValid } from './services/sourceLinks';
+import { mediaLinkValid, mediaThumbLinkValid, sourceLinkValid, studyLinkValid, vaultLinkValid } from './services/sourceLinks';
+import { localFileFor, localThumbFor } from './services/mediaStore';
 import { clipFile } from './services/vault';
 import { studyFile } from './services/study';
 import { vault } from './routes/vault';
@@ -93,6 +94,28 @@ export function createApp() {
       if (!vaultLinkValid(req.params.id, req.query.exp, req.query.sig)) return next(new HttpError(403, 'This link has expired. Reload the page.', 'forbidden'));
       const file = await clipFile(req.params.id);
       res.sendFile(file, { dotfiles: 'allow' }, (err) => err && !res.headersSent && next(new HttpError(404, 'Not found', 'not_found')));
+    }),
+  );
+
+  // A saved take whose file is kept on this computer (recovered videos). Same idea: a signed link made when the page loads.
+  api.get(
+    '/media/local/:id',
+    wrap(async (req, res, next) => {
+      if (!mediaLinkValid(req.params.id, req.query.exp, req.query.sig)) return next(new HttpError(403, 'This link has expired. Reload the page.', 'forbidden'));
+      const f = await localFileFor(req.params.id);
+      if (!f) return next(new HttpError(404, 'Not found', 'not_found'));
+      res.setHeader('Content-Type', f.contentType);
+      res.sendFile(f.file, { dotfiles: 'allow', headers: { 'Content-Type': f.contentType } }, (err) => err && !res.headersSent && next(new HttpError(404, 'Not found', 'not_found')));
+    }),
+  );
+
+  api.get(
+    '/media/local/:id/thumb',
+    wrap(async (req, res, next) => {
+      if (!mediaThumbLinkValid(req.params.id, req.query.exp, req.query.sig)) return next(new HttpError(403, 'This link has expired. Reload the page.', 'forbidden'));
+      const f = await localThumbFor(req.params.id);
+      if (!f) return next(new HttpError(404, 'Not found', 'not_found'));
+      res.sendFile(f.file, { dotfiles: 'allow', headers: { 'Content-Type': f.contentType, 'Cache-Control': 'private, max-age=3600' } }, (err) => err && !res.headersSent && next(new HttpError(404, 'Not found', 'not_found')));
     }),
   );
 

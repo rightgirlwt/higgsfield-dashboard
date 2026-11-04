@@ -2,6 +2,7 @@ import { Check, Film, ImageIcon, Trash2, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCan } from '../../auth/context';
 import { api, errorMessage } from '../../lib/api';
+import { composeGroup, episodesOf, parseGroup } from '../../lib/episodes';
 import { usd } from '../../lib/format';
 import type { BoardItem, MediaInput, MediaRole, ProjectAsset, ProjectTypeDef, StudioCatalog, StudioMode, StudioModel } from '../../lib/types';
 import { useToast } from '../../state/Toast';
@@ -41,6 +42,10 @@ export function ItemEditor({
   const canWrite = useCan('user');
   const [tab, setTab] = useState<'details' | 'takes'>('details');
   const [group, setGroup] = useState('');
+  // Micro drama: the group text "Ep 4 · Scene 2" is edited as an episode number and a scene name
+  const micro = type.id === 'micro_drama';
+  const [episode, setEpisode] = useState('');
+  const [scene, setScene] = useState('');
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
   const [notes, setNotes] = useState('');
@@ -60,6 +65,9 @@ export function ItemEditor({
     if (!item) return;
     setTab(item.status === 'review' && item.takeCount > 0 ? 'takes' : 'details');
     setGroup(item.group);
+    const parsed = parseGroup(item.group);
+    setEpisode(parsed.episode === null ? '' : String(parsed.episode));
+    setScene(parsed.scene);
     setTitle(item.title);
     setPrompt(item.prompt);
     setNotes(item.notes);
@@ -112,7 +120,8 @@ export function ItemEditor({
     if (count > 1 && !nativeBatch) meta.count = count;
     else delete meta.count;
     const cleanSettings = Object.fromEntries(Object.entries(settings).filter(([k, v]) => v !== undefined && v !== '' && mode && k in mode.params));
-    return { group: group.trim(), title: title.trim(), prompt, notes, modelId, mode: modelId ? (mode?.id ?? '') : '', settings: modelId ? cleanSettings : {}, media: modelId ? cleanMedia : {}, meta };
+    const epNum = Number.parseInt(episode, 10);
+    return { group: micro ? composeGroup(Number.isFinite(epNum) ? epNum : null, scene) : group.trim(), title: title.trim(), prompt, notes, modelId, mode: modelId ? (mode?.id ?? '') : '', settings: modelId ? cleanSettings : {}, media: modelId ? cleanMedia : {}, meta };
   };
 
   const save = async (then?: 'generate') => {
@@ -183,13 +192,29 @@ export function ItemEditor({
 
           {tab === 'details' && (
             <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label={type.groupLabel} htmlFor="ie-group">
-                  <Input id="ie-group" list="ie-groups" value={group} onChange={(e) => setGroup(e.target.value)} disabled={readOnly} placeholder={type.id === 'micro_drama' ? 'Ep 1 · Scene 1' : 'Concept A'} />
-                  <datalist id="ie-groups">{groups.map((g) => <option key={g} value={g} />)}</datalist>
-                </Field>
-                <Field label="Title" htmlFor="ie-title"><Input id="ie-title" value={title} maxLength={160} onChange={(e) => setTitle(e.target.value)} disabled={readOnly} /></Field>
-              </div>
+              {micro ? (
+                <div className="grid gap-4 sm:grid-cols-[7rem_minmax(0,12rem)_minmax(0,1fr)]">
+                  <Field label="Episode" htmlFor="ie-episode">
+                    <Input id="ie-episode" type="number" min={1} inputMode="numeric" list="ie-episodes" value={episode} onChange={(e) => setEpisode(e.target.value)} disabled={readOnly} placeholder="1" />
+                    <datalist id="ie-episodes">{episodesOf(items).filter((e) => e.episode !== null).map((e) => <option key={e.episode} value={e.episode!} />)}</datalist>
+                  </Field>
+                  <Field label="Scene" htmlFor="ie-scene">
+                    <Input id="ie-scene" list="ie-scenes" value={scene} onChange={(e) => setScene(e.target.value)} disabled={readOnly} placeholder="Scene 1" />
+                    <datalist id="ie-scenes">
+                      {[...new Set(items.filter((i) => String(parseGroup(i.group).episode ?? '') === episode.trim()).map((i) => parseGroup(i.group).scene).filter(Boolean))].map((s) => <option key={s} value={s} />)}
+                    </datalist>
+                  </Field>
+                  <Field label="Title" htmlFor="ie-title"><Input id="ie-title" value={title} maxLength={160} onChange={(e) => setTitle(e.target.value)} disabled={readOnly} /></Field>
+                </div>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label={type.groupLabel} htmlFor="ie-group">
+                    <Input id="ie-group" list="ie-groups" value={group} onChange={(e) => setGroup(e.target.value)} disabled={readOnly} placeholder="Concept A" />
+                    <datalist id="ie-groups">{groups.map((g) => <option key={g} value={g} />)}</datalist>
+                  </Field>
+                  <Field label="Title" htmlFor="ie-title"><Input id="ie-title" value={title} maxLength={160} onChange={(e) => setTitle(e.target.value)} disabled={readOnly} /></Field>
+                </div>
+              )}
 
               <div className="grid gap-4 md:grid-cols-[minmax(0,20rem)_1fr]">
                 <Field label="Model" htmlFor="ie-model" hint={model?.description}>
@@ -300,7 +325,8 @@ export function ItemEditor({
                   <ul className="grid gap-4 sm:grid-cols-2">
                     {takes.map((t) => {
                       const chosen = item.approvedAssetId === t.id;
-                      const playable = /^https?:\/\//i.test(t.url);
+                      // a link on the web, or one the dashboard serves itself (videos kept on this computer)
+                      const playable = /^https?:\/\//i.test(t.url) || t.url.startsWith('/api/');
                       return (
                         <li key={t.id} className={cx('overflow-hidden rounded-2xl border bg-slate-950/50', chosen ? 'border-emerald-500 ring-2 ring-emerald-500/30' : 'border-slate-800')}>
                           <div className="bg-black">

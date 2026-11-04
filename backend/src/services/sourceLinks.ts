@@ -29,6 +29,22 @@ export function signStudyLink(id: string, now = Date.now()): string {
 
 export const studyLinkValid = (id: string, exp: unknown, sig: unknown, now = Date.now()) => sourceLinkValid(`study:${id}`, exp, sig, now);
 
+/** And for a media item whose file is kept on this computer (a take recovered from the local copies). */
+export function signMediaLink(id: string, now = Date.now()): string {
+  const exp = now + TTL_MS;
+  return `/api/media/local/${id}?exp=${exp}&sig=${sign(`media:${id}`, exp)}`;
+}
+
+/** A picture of a locally kept video: the link a page uses for its thumbnail. */
+export function signMediaThumbLink(id: string, now = Date.now()): string {
+  const exp = now + TTL_MS;
+  return `/api/media/local/${id}/thumb?exp=${exp}&sig=${sign(`mediathumb:${id}`, exp)}`;
+}
+
+export const mediaThumbLinkValid = (id: string, exp: unknown, sig: unknown, now = Date.now()) => sourceLinkValid(`mediathumb:${id}`, exp, sig, now);
+
+export const mediaLinkValid = (id: string, exp: unknown, sig: unknown, now = Date.now()) => sourceLinkValid(`media:${id}`, exp, sig, now);
+
 export function vaultLinkValid(id: string, exp: unknown, sig: unknown, now = Date.now()): boolean {
   return sourceLinkValid(`vault:${id}`, exp, sig, now);
 }
